@@ -21,8 +21,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.step_quest"
-        minSdk = flutter.minSdkVersion 
-        
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -37,4 +36,7 @@ android {
 
 flutter {
     source = "../.."
+}
+dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
 }

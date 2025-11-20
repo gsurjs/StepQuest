@@ -3,6 +3,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart'; 
 import 'package:step_quest/services/auth_service.dart'; 
 import 'package:step_quest/services/database_service.dart';
+import 'package:step_quest/services/step_service.dart';
+import 'dart:async';
 import 'dart:math';
 
 // ==========================================
@@ -52,6 +54,12 @@ class AppState extends ChangeNotifier {
   // Initialize our custom AuthService
   final AuthService _authService = AuthService();
   final DatabaseService _dbService = DatabaseService();
+  
+  // Pedometer init service and subscription
+  final StepService _stepService = StepService();
+  StreamSubscription? _stepSubscription;
+
+
   // Track the real Firebase User
   User? _firebaseUser;
   UserModel? _currentUser;
@@ -79,14 +87,52 @@ class AppState extends ChangeNotifier {
            print("⚠️ No DB entry found. Using Mock.");
            _currentUser = UserModel.mock();
         }
+
+        _initPedometer(); // Start listening to steps
       } else {
         print("ℹ️ User is logged out");
         _currentUser = null;
+        //stop listening on logout to save battery
+        _stepSubscription?.cancel();
       }
       notifyListeners();
     });
   }
-
+  // Logic to handle step events
+  Future<void> _initPedometer() async {
+    bool granted = await _stepService.init();
+    if (granted) {
+      print("✅ Pedometer Permission Granted");
+      _stepSubscription = _stepService.stepStream.listen(
+        (stepEvent) {
+          print("👣 Steps Update: ${stepEvent.steps}");
+          
+          if (_currentUser != null) {
+            // We create a NEW user object with the updated steps
+            // (Because our UserModel fields are 'final' and cannot be changed directly)
+            _currentUser = UserModel(
+              uid: _currentUser!.uid,
+              email: _currentUser!.email,
+              heroName: _currentUser!.heroName,
+              heroClass: _currentUser!.heroClass,
+              level: _currentUser!.level,
+              // UPDATE THIS FIELD:
+              currentSteps: stepEvent.steps, 
+              maxEnergy: _currentUser!.maxEnergy,
+              currentEnergy: _currentUser!.currentEnergy,
+              gold: _currentUser!.gold,
+            );
+            
+            // Tell the UI to repaint
+            notifyListeners(); 
+          }
+        },
+        onError: (error) => print("❌ Pedometer Error: $error"),
+      );
+    } else {
+      print("⚠️ Pedometer Permission Denied");
+    }
+  }
 
   // Calls authService
   Future<void> login(String email, String password) async {
