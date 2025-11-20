@@ -4,7 +4,7 @@ import 'dart:async';
 
 class StepService {
   Stream<StepCount>? _stepCountStream;
-  Stream<PedometerStatus>? _stepStatusStream;
+  Stream<PedestrianStatus>? _stepStatusStream;
 
   // Initialize and check permissions
   Future<bool> init() async {
@@ -24,8 +24,8 @@ class StepService {
     return _stepCountStream!;
   }
 
-  Stream<PedometerStatus> get statusStream {
-    _stepStatusStream ??= Pedometer.pedometerStatusStream;
+  Stream<PedestrianStatus> get statusStream {
+    _stepStatusStream ??= Pedometer.pedestrianStatusStream;
     return _stepStatusStream!;
   }
 }
