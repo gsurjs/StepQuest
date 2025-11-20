@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart'; // 1. Import Firebase Core
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart'; 
+import 'package:step_quest/services/auth_service.dart'; 
 import 'dart:math';
 
 // ==========================================
@@ -46,20 +48,50 @@ class UserModel {
 // ==========================================
 
 class AppState extends ChangeNotifier {
+  // Initialize our custom AuthService
+  final AuthService _authService = AuthService();
+  
+  // Track the real Firebase User
+  User? _firebaseUser;
   UserModel? _currentUser;
-  bool get isAuthenticated => _currentUser != null;
+
+  bool get isAuthenticated => _firebaseUser != null;
   UserModel? get user => _currentUser;
 
-  Future<void> login(String email, String password) async {
-    // TODO: Chunk 4 - We will replace this with real Firebase Auth soon!
-    await Future.delayed(const Duration(seconds: 1));
-    _currentUser = UserModel.mock();
-    notifyListeners();
+  AppState() {
+    _init();
   }
 
-  void logout() {
-    _currentUser = null;
-    notifyListeners();
+  // Setup the Listener
+  // This function runs automatically whenever you log in or log out
+  void _init() {
+    _authService.authStateChanges.listen((User? user) {
+      _firebaseUser = user;
+      
+      if (user != null) {
+        print("✅ FIREBASE AUTH DETECTED: ${user.email}");
+        // Temporary: We still mock the RPG stats, but the Login ID is real!
+        _currentUser = UserModel.mock(); 
+      } else {
+        print("ℹ️ User is logged out");
+        _currentUser = null;
+      }
+      notifyListeners(); // Updates the UI (switches from Login -> Dashboard)
+    });
+  }
+
+  // Calls authService
+  Future<void> login(String email, String password) async {
+    await _authService.signIn(email, password);
+  }
+
+  // Registration logic
+  Future<void> register(String email, String password) async {
+    await _authService.signUp(email, password);
+  }
+
+  Future<void> logout() async {
+    await _authService.signOut();
   }
 }
 
@@ -155,61 +187,112 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
+  
+  // Toggle between "Login Mode" and "Register Mode"
+  bool _isLogin = true; 
+  
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
 
-  void _handleLogin() async {
+  // [8] UPDATED: The Submit Logic
+  void _handleSubmit() async {
+    if (!_formKey.currentState!.validate()) return;
+
     setState(() => _isLoading = true);
-    await widget.appState.login("test", "test");
-    if (mounted) setState(() => _isLoading = false);
+    
+    try {
+      // If _isLogin is true, we call login(), otherwise we call register()
+      if (_isLogin) {
+        await widget.appState.login(
+          _emailController.text.trim(), 
+          _passwordController.text.trim()
+        );
+      } else {
+        await widget.appState.register(
+          _emailController.text.trim(), 
+          _passwordController.text.trim()
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.directions_walk, size: 80, color: Color(0xFFEAB308)),
-              const SizedBox(height: 20),
-              Text("StepQuest", style: Theme.of(context).textTheme.displayLarge),
-              Text("Turn your walk into an adventure.", style: Theme.of(context).textTheme.bodyMedium),
-              const SizedBox(height: 48),
-              
-              TextFormField(
-                decoration: const InputDecoration(
-                  labelText: "Email",
-                  prefixIcon: Icon(Icons.email),
-                  border: OutlineInputBorder(),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.directions_walk, size: 80, color: Color(0xFFEAB308)),
+                const SizedBox(height: 20),
+                Text("StepQuest", style: Theme.of(context).textTheme.displayLarge),
+                
+                // [9] UI: Change title based on mode
+                Text(
+                  _isLogin ? "Enter the Tavern" : "Join the Guild", 
+                  style: Theme.of(context).textTheme.bodyMedium
                 ),
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: "Password",
-                  prefixIcon: Icon(Icons.lock),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 24),
-              
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _handleLogin,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).primaryColor,
-                    foregroundColor: Colors.black,
+                const SizedBox(height: 48),
+                
+                TextFormField(
+                  controller: _emailController,
+                  // [10] UI: Basic Validation
+                  validator: (val) => val != null && val.contains('@') ? null : 'Invalid Email',
+                  decoration: const InputDecoration(
+                    labelText: "Email",
+                    prefixIcon: Icon(Icons.email),
+                    border: OutlineInputBorder(),
                   ),
-                  child: _isLoading 
-                    ? const CircularProgressIndicator() 
-                    : const Text("ENTER THE TAVERN", style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+                
+                TextFormField(
+                  controller: _passwordController,
+                  validator: (val) => val != null && val.length > 5 ? null : 'Password too short',
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: "Password",
+                    prefixIcon: Icon(Icons.lock),
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _handleSubmit,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Theme.of(context).primaryColor,
+                      foregroundColor: Colors.black,
+                    ),
+                    child: _isLoading 
+                      ? const CircularProgressIndicator() 
+                      : Text(_isLogin ? "LOGIN" : "REGISTER", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                
+                // [11] UI: Button to toggle modes
+                TextButton(
+                  onPressed: () => setState(() => _isLogin = !_isLogin),
+                  child: Text(_isLogin ? "New Hero? Create Account" : "Already have a hero? Login"),
+                )
+              ],
+            ),
           ),
         ),
       ),
