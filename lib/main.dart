@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart'; 
 import 'package:step_quest/services/auth_service.dart'; 
+import 'package:step_quest/services/database_service.dart';
 import 'dart:math';
 
 // ==========================================
@@ -50,7 +51,7 @@ class UserModel {
 class AppState extends ChangeNotifier {
   // Initialize our custom AuthService
   final AuthService _authService = AuthService();
-  
+  final DatabaseService _dbService = DatabaseService();
   // Track the real Firebase User
   User? _firebaseUser;
   UserModel? _currentUser;
@@ -65,20 +66,27 @@ class AppState extends ChangeNotifier {
   // Setup the Listener
   // This function runs automatically whenever you log in or log out
   void _init() {
-    _authService.authStateChanges.listen((User? user) {
+    _authService.authStateChanges.listen((User? user) async {
       _firebaseUser = user;
       
       if (user != null) {
-        print("✅ FIREBASE AUTH DETECTED: ${user.email}");
-        // Temporary: We still mock the RPG stats, but the Login ID is real!
-        _currentUser = UserModel.mock(); 
+        print("✅ Auth Detected. Fetching RPG Stats for: ${user.email}");
+        // [3] UPDATED: Fetch REAL data from Firestore
+        _currentUser = await _dbService.getUser(user.uid);
+        
+        // Fallback if DB entry is missing (shouldn't happen if register works)
+        if (_currentUser == null) {
+           print("⚠️ No DB entry found. Using Mock.");
+           _currentUser = UserModel.mock();
+        }
       } else {
         print("ℹ️ User is logged out");
         _currentUser = null;
       }
-      notifyListeners(); // Updates the UI (switches from Login -> Dashboard)
+      notifyListeners();
     });
   }
+
 
   // Calls authService
   Future<void> login(String email, String password) async {
@@ -86,8 +94,21 @@ class AppState extends ChangeNotifier {
   }
 
   // Registration logic
+  // Registration now saves to Database
   Future<void> register(String email, String password) async {
-    await _authService.signUp(email, password);
+    // 1. Create Auth Account
+    User? user = await _authService.signUp(email, password);
+    
+    // Create Firestore Entry (Default Hero)
+    if (user != null) {
+      UserModel newUser = UserModel(
+        uid: user.uid, 
+        email: email, 
+        heroName: "New Hero", 
+        heroClass: "Warrior"
+      );
+      await _dbService.createUser(newUser);
+    }
   }
 
   Future<void> logout() async {
