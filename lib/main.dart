@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart'; // 1. Import Firebase Core
 import 'dart:math';
 
 // ==========================================
 // MODELS (Week 1, Days 3-4: Schema)
 // ==========================================
 
-/// Represents the player's persistent data.
-/// mirrors the Firestore document structure.
 class UserModel {
   final String uid;
   final String email;
@@ -30,7 +29,6 @@ class UserModel {
     this.gold = 0,
   });
 
-  // Factory to create a mock user for testing
   factory UserModel.mock() {
     return UserModel(
       uid: 'test_user_123',
@@ -43,24 +41,18 @@ class UserModel {
   }
 }
 
-
 // ==========================================
 // STATE MANAGEMENT & AUTH (Week 1, Days 1-2)
 // ==========================================
 
-/// A simple provider to manage User State and Auth logic.
-/// Firebase Auth here.
 class AppState extends ChangeNotifier {
   UserModel? _currentUser;
   bool get isAuthenticated => _currentUser != null;
   UserModel? get user => _currentUser;
 
-  // TODO: Week 1 Day 1 - Replace with Firebase Auth signIn
   Future<void> login(String email, String password) async {
-    // Simulate network delay
+    // TODO: Chunk 4 - We will replace this with real Firebase Auth soon!
     await Future.delayed(const Duration(seconds: 1));
-    
-    // Mock successful login
     _currentUser = UserModel.mock();
     notifyListeners();
   }
@@ -68,14 +60,6 @@ class AppState extends ChangeNotifier {
   void logout() {
     _currentUser = null;
     notifyListeners();
-  }
-
-  // TODO: Week 2 - Connect this to the Pedometer package
-  void updateSteps(int steps) {
-    if (_currentUser != null) {
-      // Logic to update steps would go here
-      notifyListeners();
-    }
   }
 }
 
@@ -95,13 +79,14 @@ class AppTheme {
       surface: Color(0xFF1E293B), // Slate 800
       error: Color(0xFFEF4444), // Red 500
     ),
-    fontFamily: 'Georgia', // Serif for that RPG feel
+    fontFamily: 'Georgia',
     textTheme: const TextTheme(
       displayLarge: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEAB308)),
       titleLarge: TextStyle(fontWeight: FontWeight.bold),
-      bodyMedium: TextStyle(color: Color(0xFF94A3B8)), // Slate 400
+      bodyMedium: TextStyle(color: Color(0xFF94A3B8)),
     ),
-    cardTheme: CardTheme(
+
+    cardTheme: CardThemeData(
       color: const Color(0xFF1E293B),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
@@ -112,9 +97,17 @@ class AppTheme {
 // MAIN APP ENTRY POINT
 // ==========================================
 
-void main() {
-  // TODO: Week 1 Day 1 - Initialize Firebase here
-  // await Firebase.initializeApp();
+void main() async {
+  // Bindings must be initialized before Firebase
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Firebase
+  try {
+    await Firebase.initializeApp();
+    print("✅ Firebase Initialized Successfully");
+  } catch (e) {
+    print("❌ Firebase Initialization Failed: $e");
+  }
   
   runApp(const StepQuestApp());
 }
@@ -131,7 +124,6 @@ class _StepQuestAppState extends State<StepQuestApp> {
 
   @override
   Widget build(BuildContext context) {
-    // Using an AnimatedBuilder to listen to AppState changes (Simple State Management)
     return AnimatedBuilder(
       animation: _appState,
       builder: (context, child) {
@@ -147,6 +139,7 @@ class _StepQuestAppState extends State<StepQuestApp> {
     );
   }
 }
+
 // ==========================================
 // SCREENS
 // ==========================================
@@ -184,7 +177,6 @@ class _LoginScreenState extends State<LoginScreen> {
               Text("Turn your walk into an adventure.", style: Theme.of(context).textTheme.bodyMedium),
               const SizedBox(height: 48),
               
-              // Mock Form
               TextFormField(
                 decoration: const InputDecoration(
                   labelText: "Email",
@@ -236,7 +228,6 @@ class MainScaffold extends StatefulWidget {
 
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
-
   late final List<Widget> _screens;
 
   @override
@@ -244,9 +235,9 @@ class _MainScaffoldState extends State<MainScaffold> {
     super.initState();
     _screens = [
       DashboardScreen(appState: widget.appState),
-      const Center(child: Text("Battle Arena\n(Coming Week 2)")), // Placeholder
-      const Center(child: Text("Quest Board\n(Coming Week 3)")),  // Placeholder
-      const Center(child: Text("Guild Hall\n(Coming Week 3)")),   // Placeholder
+      const Center(child: Text("Battle Arena\n(Coming Week 2)")),
+      const Center(child: Text("Quest Board\n(Coming Week 3)")),
+      const Center(child: Text("Guild Hall\n(Coming Week 3)")),
       ProfileScreen(appState: widget.appState),
     ];
   }
@@ -287,7 +278,6 @@ class DashboardScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -307,7 +297,6 @@ class DashboardScreen extends StatelessWidget {
             ),
             const SizedBox(height: 40),
 
-            // Step Circle
             Center(
               child: Stack(
                 alignment: Alignment.center,
@@ -316,7 +305,7 @@ class DashboardScreen extends StatelessWidget {
                     width: 200,
                     height: 200,
                     child: CircularProgressIndicator(
-                      value: user.currentSteps / 10000, // Assuming 10k goal
+                      value: user.currentSteps / 10000,
                       strokeWidth: 20,
                       backgroundColor: Theme.of(context).colorScheme.surface,
                       color: Colors.green,
@@ -335,7 +324,6 @@ class DashboardScreen extends StatelessWidget {
             ),
             const SizedBox(height: 40),
 
-            // Energy Bar
             const Text("Energy"),
             const SizedBox(height: 8),
             LinearProgressIndicator(
@@ -376,7 +364,6 @@ class ProfileScreen extends StatelessWidget {
             Text("Level ${user.level} ${user.heroClass}", style: const TextStyle(color: Color(0xFFEAB308))),
             const SizedBox(height: 32),
             
-            // Stats Grid
             Expanded(
               child: GridView.count(
                 crossAxisCount: 2,
@@ -410,9 +397,9 @@ class ProfileScreen extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey), textAlign: TextAlign.center),
           const SizedBox(height: 4),
-          Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+          Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
         ],
       ),
     );
