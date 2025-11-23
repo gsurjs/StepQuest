@@ -28,6 +28,7 @@ class UserModel {
   // Tracking daily progress
   final DateTime? lastLoginDate;
   final List<String> claimedQuestIds;
+  final List<String> inventory; //
 
   UserModel({
     required this.uid,
@@ -44,6 +45,7 @@ class UserModel {
     this.guildId,
     this.lastLoginDate,
     this.claimedQuestIds = const [],
+    this.inventory = const [],
   });
 
   factory UserModel.fromMap(Map<String, dynamic> data) {
@@ -65,6 +67,7 @@ class UserModel {
           ? (data['lastLoginDate'] as Timestamp).toDate() 
           : DateTime.now(),
       claimedQuestIds: List<String>.from(data['claimedQuestIds'] ?? []),
+      inventory: List<String>.from(data['inventory'] ?? []), 
     );
   }
 
@@ -84,6 +87,7 @@ class UserModel {
       'guildId': guildId,
       'lastLoginDate': lastLoginDate != null ? Timestamp.fromDate(lastLoginDate!) : FieldValue.serverTimestamp(),
       'claimedQuestIds': claimedQuestIds,
+      'inventory': inventory,
     };
   }
 
@@ -93,6 +97,16 @@ class UserModel {
       currentSteps: 5000, gold: 100
     );
   }
+}
+
+// Item Definition
+class Item {
+  final String id;
+  final String name;
+  final String icon;
+  final String rarity; // Common, Rare, Legendary
+
+  Item(this.id, this.name, this.icon, this.rarity);
 }
 
 // Quest Definition
@@ -150,6 +164,15 @@ class AppState extends ChangeNotifier {
   int monsterMaxHp = 100;
   String battleLog = "A wild Goblin appeared!";
 
+  // Game Items Catalog
+  final List<Item> gameItems = [
+    Item('potion', 'Health Potion', '🧪', 'Common'),
+    Item('sword_wood', 'Wooden Sword', '🗡️', 'Common'),
+    Item('shield_iron', 'Iron Shield', '🛡️', 'Rare'),
+    Item('boots_speed', 'Boots of Haste', '👢', 'Rare'),
+    Item('ring_power', 'Ring of Power', '💍', 'Legendary'),
+  ];
+
   // Daily Quests List
   final List<Quest> dailyQuests = [
     Quest('q1', 'Morning Jog', 'Walk 1,000 steps', 1000, 50, 20),
@@ -200,16 +223,11 @@ class AppState extends ChangeNotifier {
   // Reset quests if it's a new day
   void _checkDailyReset() {
     if (_currentUser == null || _currentUser!.lastLoginDate == null) return;
-
     final now = DateTime.now();
     final last = _currentUser!.lastLoginDate!;
-    
-    // If day, month, or year is different, it's a new day
     if (now.day != last.day || now.month != last.month || now.year != last.year) {
-      print("🌅 New Day Detected! Resetting Quests.");
       _updateUserData(claimedQuests: [], lastLogin: now);
     } else {
-      // Just update the login time
       _updateUserData(lastLogin: now);
     }
   }
@@ -264,7 +282,7 @@ class AppState extends ChangeNotifier {
   // Unified Update Helper
   void _updateUserData({
     int? steps, int? gold, int? xp, int? level, int? nextXp, 
-    List<String>? claimedQuests, DateTime? lastLogin
+    List<String>? claimedQuests, DateTime? lastLogin, List<String>? inventory
   }) {
      if (_currentUser != null) {
         _currentUser = UserModel(
@@ -282,6 +300,7 @@ class AppState extends ChangeNotifier {
         guildId: _currentUser!.guildId,
         lastLoginDate: lastLogin ?? _currentUser!.lastLoginDate,
         claimedQuestIds: claimedQuests ?? _currentUser!.claimedQuestIds,
+        inventory: inventory ?? _currentUser!.inventory,
       );
       notifyListeners();
       _dbService.createUser(_currentUser!);
@@ -326,6 +345,7 @@ class AppState extends ChangeNotifier {
     int newXp = _currentUser!.xp;
     int newLevel = _currentUser!.level;
     int newNextXp = _currentUser!.xpToNextLevel;
+    List<String> currentInventory = List.from(_currentUser!.inventory);
 
     if (monsterHp <= 0) {
       monsterHp = 100;
@@ -333,6 +353,15 @@ class AppState extends ChangeNotifier {
       newGold += reward;
       newXp += 50;
       battleLog = "Victory! +$reward G, +50 XP";
+
+      // [INVENTORY NEW] Loot Drop Chance (30%)
+      if (Random().nextDouble() < 0.3) {
+        // Pick a random item
+        Item drop = gameItems[Random().nextInt(gameItems.length)];
+        currentInventory.add(drop.id);
+        battleLog += "\n🎁 Found loot: ${drop.name}!";
+      }
+
       if (newXp >= newNextXp) {
         newLevel++;
         newXp = newXp - newNextXp;
@@ -340,7 +369,8 @@ class AppState extends ChangeNotifier {
         battleLog += "\n🎉 LEVEL UP!";
       }
     }
-    _updateUserData(steps: newSteps, gold: newGold, xp: newXp, level: newLevel, nextXp: newNextXp);
+
+    _updateUserData(steps: newSteps, gold: newGold, xp: newXp, level: newLevel, nextXp: newNextXp, inventory: currentInventory);
   }
 
   Future<void> defendAction() async {
@@ -515,6 +545,13 @@ class MainScaffold extends StatefulWidget {
 
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+
+  }
+
   @override
   Widget build(BuildContext context) {
     final List<Widget> screens = [
@@ -714,16 +751,14 @@ class BattleScreen extends StatelessWidget {
   }
 }
 
-// --- QUEST SCREEN (UPDATED) ---
+// --- QUEST SCREEN ---
 class QuestScreen extends StatelessWidget {
   final AppState appState;
   const QuestScreen({super.key, required this.appState});
-
   @override
   Widget build(BuildContext context) {
     final steps = appState.user?.currentSteps ?? 0;
     final claimed = appState.user?.claimedQuestIds ?? [];
-
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -733,44 +768,17 @@ class QuestScreen extends StatelessWidget {
             Text("Quest Board", style: Theme.of(context).textTheme.displayLarge),
             const Text("Daily challenges reset at midnight.", style: TextStyle(color: Colors.grey)),
             const SizedBox(height: 20),
-            
-            // Dynamic List from AppState
             ...appState.dailyQuests.map((quest) {
               bool isCompleted = steps >= quest.targetSteps;
               bool isClaimed = claimed.contains(quest.id);
-              
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 color: isClaimed ? Colors.green[900]!.withOpacity(0.3) : Theme.of(context).cardTheme.color,
                 child: ListTile(
-                  leading: Icon(
-                    isClaimed ? Icons.check_circle : (isCompleted ? Icons.stars : Icons.circle_outlined), 
-                    color: isClaimed ? Colors.green : (isCompleted ? Colors.amber : Colors.grey)
-                  ),
+                  leading: Icon(isClaimed ? Icons.check_circle : (isCompleted ? Icons.stars : Icons.circle_outlined), color: isClaimed ? Colors.green : (isCompleted ? Colors.amber : Colors.grey)),
                   title: Text(quest.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(quest.description),
-                      const SizedBox(height: 4),
-                      LinearProgressIndicator(
-                        value: (steps / quest.targetSteps).clamp(0.0, 1.0),
-                        backgroundColor: Colors.black26,
-                        color: isCompleted ? Colors.green : Colors.blue,
-                        minHeight: 6,
-                      )
-                    ],
-                  ),
-                  trailing: isClaimed 
-                    ? const Text("DONE", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold))
-                    : ElevatedButton(
-                        onPressed: isCompleted ? () => appState.claimQuest(quest) : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isCompleted ? Colors.amber : Colors.grey[800],
-                          foregroundColor: Colors.black,
-                        ),
-                        child: Text(isCompleted ? "CLAIM" : "${quest.rewardGold} G"),
-                      ),
+                  subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(quest.description), const SizedBox(height: 4), LinearProgressIndicator(value: (steps / quest.targetSteps).clamp(0.0, 1.0), backgroundColor: Colors.black26, color: isCompleted ? Colors.green : Colors.blue, minHeight: 6)]),
+                  trailing: isClaimed ? const Text("DONE", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)) : ElevatedButton(onPressed: isCompleted ? () => appState.claimQuest(quest) : null, style: ElevatedButton.styleFrom(backgroundColor: isCompleted ? Colors.amber : Colors.grey[800], foregroundColor: Colors.black), child: Text(isCompleted ? "CLAIM" : "${quest.rewardGold} G")),
                 ),
               );
             }),
@@ -795,26 +803,7 @@ class GuildScreen extends StatelessWidget {
           final guilds = snapshot.data!;
           return AlertDialog(
             title: const Text("Join a Guild"),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: guilds.isEmpty 
-                ? const Text("No guilds found. Create one!") 
-                : ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: guilds.length,
-                    itemBuilder: (ctx, i) => ListTile(
-                      title: Text(guilds[i].name),
-                      subtitle: Text("${guilds[i].members.length} members"),
-                      trailing: ElevatedButton(
-                        onPressed: () {
-                          appState.joinGuild(guilds[i].id);
-                          Navigator.pop(context);
-                        },
-                        child: const Text("JOIN"),
-                      ),
-                    ),
-                  ),
-            ),
+            content: SizedBox(width: double.maxFinite, child: guilds.isEmpty ? const Text("No guilds found. Create one!") : ListView.builder(shrinkWrap: true, itemCount: guilds.length, itemBuilder: (ctx, i) => ListTile(title: Text(guilds[i].name), subtitle: Text("${guilds[i].members.length} members"), trailing: ElevatedButton(onPressed: () { appState.joinGuild(guilds[i].id); Navigator.pop(context); }, child: const Text("JOIN"))))),
             actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL"))],
           );
         },
@@ -912,6 +901,7 @@ class GuildScreen extends StatelessWidget {
   }
 }
 
+// --- PROFILE SCREEN ---
 class ProfileScreen extends StatelessWidget {
   final AppState appState;
   const ProfileScreen({super.key, required this.appState});
@@ -924,36 +914,39 @@ class ProfileScreen extends StatelessWidget {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            CircleAvatar(
-              radius: 50,
-              backgroundColor: Theme.of(context).colorScheme.surface,
-              child: const Icon(Icons.person, size: 50, color: Colors.grey),
-            ),
+            CircleAvatar(radius: 50, backgroundColor: Theme.of(context).colorScheme.surface, child: const Icon(Icons.person, size: 50, color: Colors.grey)),
             const SizedBox(height: 16),
             Text(user.heroName, style: Theme.of(context).textTheme.headlineMedium),
             Text("Level ${user.level} ${user.heroClass}", style: const TextStyle(color: Color(0xFFEAB308))),
             const SizedBox(height: 8),
             SizedBox(width: 200, child: LinearProgressIndicator(value: user.xp / user.xpToNextLevel, backgroundColor: Colors.grey[800], color: Colors.purpleAccent, minHeight: 10)),
             Text("${user.xp} / ${user.xpToNextLevel} XP", style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
+            
+            // Grid
+            Align(alignment: Alignment.centerLeft, child: Text("Inventory", style: Theme.of(context).textTheme.titleLarge)),
+            const SizedBox(height: 8),
             Expanded(
-              child: GridView.count(
-                crossAxisCount: 2, crossAxisSpacing: 16, mainAxisSpacing: 16, childAspectRatio: 1.5,
-                children: [
-                  _buildStatCard(context, "Strength", "24"),
-                  _buildStatCard(context, "Agility", "18"),
-                  _buildStatCard(context, "Total Steps", "${user.currentSteps}"),
-                  _buildStatCard(context, "Gold", "${user.gold}"),
-                ],
-              ),
+              child: user.inventory.isEmpty 
+                ? const Center(child: Text("Inventory is empty. Fight monsters to find loot!", style: TextStyle(color: Colors.grey)))
+                : GridView.builder(
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, crossAxisSpacing: 8, mainAxisSpacing: 8),
+                    itemCount: user.inventory.length,
+                    itemBuilder: (ctx, i) {
+                      // Simple lookup (in real app, use Map)
+                      final itemId = user.inventory[i];
+                      final item = appState.gameItems.firstWhere((it) => it.id == itemId, orElse: () => Item('unknown', '?', '❓', 'Common'));
+                      return Container(
+                        decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey[800]!)),
+                        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Text(item.icon, style: const TextStyle(fontSize: 24)), Text(item.name, textAlign: TextAlign.center, style: const TextStyle(fontSize: 8), maxLines: 2)]),
+                      );
+                    },
+                  ),
             ),
             SizedBox(width: double.infinity, child: OutlinedButton(onPressed: appState.logout, child: const Text("LOGOUT")))
           ],
         ),
       ),
     );
-  }
-  Widget _buildStatCard(BuildContext context, String label, String value) {
-    return Card(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)), const SizedBox(height: 4), Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))]));
   }
 }
