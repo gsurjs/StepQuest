@@ -1,16 +1,24 @@
-# step_quest
+# ⚔️ StepQuest - Fitness RPG
+## Turn your walk into an Adventure.
 
-A new Flutter project.
+StepQuest is a gamified fitness application built with Flutter and Firebase that transforms daily physical activity into an engaging RPG experience. By syncing with the device's pedometer, every step you take in the real world powers your hero's journey, fuels battles against monsters, and earns legendary loot.
 
-## Getting Started
+## 🚀 Features
+* **Core Mechanics:** 
+    * **👣 Real-Time Step Tracking:** Integrates with device sensors (Pedometer) to count steps live.
+    * **🔋 Energy System:** Steps convert into "Energy" needed to perform actions in the game.
+    * **⚔️ Battle System:** Use your step-energy to attack monsters. Deal damage, gain XP, and earn Gold.
+    * **📈 Character Progression:** Level up your hero to increase stats. XP bar resets and scales with each level.
 
-This project is a starting point for a Flutter application.
+* **Social & Engagement**
+    * **🛡️ Guild System:** Create or Join guilds. Contribute your steps to the guild's total score.
+    * **🏆 Global Leaderboard:** Compete against other guilds to see who walks the most.
+    * **📜 Daily Quests:** Complete challenges like "Walk 5,000 Steps" to earn bonus rewards. Quests reset daily.
+    * **🎒 Inventory & Loot:** Chance to find items (Swords, Potions) after winning battles.
 
-A few resources to get you started if this is your first Flutter project:
+## 🛠️ Tech Stack
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+**Frontend:** Flutter (Dart)
+**Backend:** Firebase (Firestore, Authentication)
+**State Management:** ChangeNotifier / Provider pattern
+**Device Integration:** pedometer, permission_handler
