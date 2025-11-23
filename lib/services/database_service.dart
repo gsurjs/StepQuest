@@ -1,13 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../main.dart'; // Import UserModel from main
+import '../main.dart'; 
 
 class DatabaseService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
-
-  // Collection Reference
   CollectionReference get _users => _db.collection('users');
 
-  // 1. Create User (Called when Registering)
+  // Create or Update User
   Future<void> createUser(UserModel user) async {
     try {
       await _users.doc(user.uid).set({
@@ -16,6 +14,8 @@ class DatabaseService {
         'heroName': user.heroName,
         'heroClass': user.heroClass,
         'level': user.level,
+        'xp': user.xp, // [NEW]
+        'xpToNextLevel': user.xpToNextLevel, // [NEW]
         'currentSteps': user.currentSteps,
         'maxEnergy': user.maxEnergy,
         'currentEnergy': user.currentEnergy,
@@ -23,16 +23,14 @@ class DatabaseService {
         'lastSync': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      print("Error creating user DB entry: $e");
-      throw e;
+      print("Error saving user: $e");
     }
   }
 
-  // 2. Get User (Called when Logging in)
+  // Get User
   Future<UserModel?> getUser(String uid) async {
     try {
       DocumentSnapshot doc = await _users.doc(uid).get();
-      
       if (doc.exists) {
         Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
         return UserModel(
@@ -41,6 +39,8 @@ class DatabaseService {
           heroName: data['heroName'] ?? 'Unknown Hero',
           heroClass: data['heroClass'] ?? 'Warrior',
           level: data['level'] ?? 1,
+          xp: data['xp'] ?? 0, // [NEW]
+          xpToNextLevel: data['xpToNextLevel'] ?? 100, // [NEW]
           currentSteps: data['currentSteps'] ?? 0,
           maxEnergy: data['maxEnergy'] ?? 100,
           currentEnergy: data['currentEnergy'] ?? 100,

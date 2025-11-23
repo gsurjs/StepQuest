@@ -17,6 +17,8 @@ class UserModel {
   final String heroName;
   final String heroClass;
   final int level;
+  final int xp; //adding curr xp
+  final int xpToNextLevel; //adding xp needed for next level
   final int currentSteps;
   final int maxEnergy;
   final int currentEnergy;
@@ -28,6 +30,8 @@ class UserModel {
     required this.heroName,
     required this.heroClass,
     this.level = 1,
+    this.xp = 0,
+    this.xpToNextLevel = 100,
     this.currentSteps = 0,
     this.maxEnergy = 100,
     this.currentEnergy = 100,
@@ -104,24 +108,29 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  // Helper to update user state safely
-  void _updateUserData({int? steps, int? gold, int? energy}) {
+   // [PERSISTENCE] Helper to update user state AND save to DB
+  void _updateUserData({int? steps, int? gold, int? xp, int? level, int? nextXp}) {
      if (_currentUser != null) {
         _currentUser = UserModel(
         uid: _currentUser!.uid,
         email: _currentUser!.email,
         heroName: _currentUser!.heroName,
         heroClass: _currentUser!.heroClass,
-        level: _currentUser!.level,
+        level: level ?? _currentUser!.level,
+        xp: xp ?? _currentUser!.xp,
+        xpToNextLevel: nextXp ?? _currentUser!.xpToNextLevel,
         currentSteps: steps ?? _currentUser!.currentSteps,
         maxEnergy: _currentUser!.maxEnergy,
-        currentEnergy: energy ?? _currentUser!.currentEnergy,
+        currentEnergy: _currentUser!.currentEnergy,
         gold: gold ?? _currentUser!.gold,
       );
       notifyListeners();
-      // In real app: _dbService.createUser(_currentUser!);
+      
+      // [CRITICAL] Save to Firestore!
+      _dbService.createUser(_currentUser!);
      }
   }
+
 
   // [GAME LOGIC] Attack Monster
   Future<void> attackMonster() async {
@@ -143,33 +152,50 @@ class AppState extends ChangeNotifier {
     battleLog = "Attack ($cost steps) dealt $damage DMG!";
 
     int newGold = _currentUser!.gold;
+    int newXp = _currentUser!.xp;
+    int newLevel = _currentUser!.level;
+    int newNextXp = _currentUser!.xpToNextLevel;
 
     // 3. Check Win Condition
+    // Victory
     if (monsterHp <= 0) {
-      monsterHp = 100; // Respawn
-      int reward = Random().nextInt(50) + 20;
-      newGold += reward;
-      battleLog = "Enemy Defeated! Found $reward Gold.";
+      monsterHp = 100;
+      int goldReward = Random().nextInt(30) + 10;
+      int xpReward = Random().nextInt(40) + 20;
+      
+      newGold += goldReward;
+      newXp += xpReward;
+      battleLog = "Victory! +$goldReward G, +$xpReward XP";
+
+      // [LEVEL UP LOGIC]
+      if (newXp >= newNextXp) {
+        newLevel++;
+        newXp = newXp - newNextXp; // Rollover XP
+        newNextXp = (newNextXp * 1.5).toInt(); // Harder to level up next time
+        battleLog += "\n🎉 LEVEL UP! You are now Lvl $newLevel!";
+      }
     }
 
-    // 4. Update UI
-    _updateUserData(steps: newSteps, gold: newGold);
+    _updateUserData(
+      steps: newSteps, 
+      gold: newGold, 
+      xp: newXp, 
+      level: newLevel, 
+      nextXp: newNextXp
+    );
   }
 
   // [GAME LOGIC] Defend
   Future<void> defendAction() async {
     if (_currentUser == null) return;
     const int cost = 50; 
-
     if (_currentUser!.currentSteps < cost) {
       battleLog = "Need $cost steps to Defend.";
       notifyListeners();
       return;
     }
-
-    int newSteps = _currentUser!.currentSteps - cost;
     battleLog = "Defend ($cost steps) - Blocked attack!";
-    _updateUserData(steps: newSteps);
+    _updateUserData(steps: _currentUser!.currentSteps - cost);
   }
 
   Future<void> login(String email, String password) async => await _authService.signIn(email, password);
@@ -510,9 +536,7 @@ class BattleScreen extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               color: const Color(0xFF0F172A),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Steps Bank Display
                   Container(
                     padding: const EdgeInsets.all(12),
                     margin: const EdgeInsets.only(bottom: 16),
@@ -526,27 +550,16 @@ class BattleScreen extends StatelessWidget {
                       ],
                     ),
                   ),
-
-                  // Log
                   Container(
                     padding: const EdgeInsets.all(12),
+                    width: double.infinity,
                     height: 60,
-                    decoration: BoxDecoration(
-                      color: Colors.black38,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.grey[800]!),
-                    ),
+                    decoration: BoxDecoration(color: Colors.black38, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey[800]!)),
                     child: Center(
-                      child: Text(
-                        appState.battleLog,
-                        style: const TextStyle(fontFamily: 'Courier', color: Colors.greenAccent),
-                        textAlign: TextAlign.center,
-                      ),
+                      child: Text(appState.battleLog, style: const TextStyle(fontFamily: 'Courier', color: Colors.greenAccent), textAlign: TextAlign.center),
                     ),
                   ),
                   const Spacer(),
-                  
-                  // Actions
                   Row(
                     children: [
                       Expanded(
@@ -554,11 +567,7 @@ class BattleScreen extends StatelessWidget {
                           onPressed: () => appState.attackMonster(),
                           icon: const Icon(Icons.flash_on),
                           label: const Text("ATTACK\n(100 Steps)"),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red[700],
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 15),
-                          ),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red[700], foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15)),
                         ),
                       ),
                       const SizedBox(width: 16),
@@ -567,11 +576,7 @@ class BattleScreen extends StatelessWidget {
                           onPressed: () => appState.defendAction(),
                           icon: const Icon(Icons.shield),
                           label: const Text("DEFEND\n(50 Steps)"),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue[800],
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 15),
-                          ),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15)),
                         ),
                       ),
                     ],
@@ -586,13 +591,13 @@ class BattleScreen extends StatelessWidget {
   }
 }
 
-// --- QUEST SCREEN (NEW) ---
+// --- QUEST SCREEN ---
 class QuestScreen extends StatelessWidget {
   final AppState appState;
   const QuestScreen({super.key, required this.appState});
-
   @override
   Widget build(BuildContext context) {
+    final steps = appState.user?.currentSteps ?? 0;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -600,11 +605,11 @@ class QuestScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("Quest Board", style: Theme.of(context).textTheme.displayLarge),
-            const Text("Daily challenges reset at midnight.", style: TextStyle(color: Colors.grey)),
+            const Text("Quests utilize your current step count!", style: TextStyle(color: Colors.grey)),
             const SizedBox(height: 20),
-            _buildQuestCard(context, "Morning Jog", "Walk 1,000 steps", "50 G", true),
-            _buildQuestCard(context, "Warrior's Path", "Defeat 3 Goblins", "100 G", false),
-            _buildQuestCard(context, "Marathon", "Walk 10,000 steps", "500 G", false),
+            _buildQuestCard(context, "Warm Up", "Reach 1,000 steps", "50 G", steps >= 1000),
+            _buildQuestCard(context, "Daily Goal", "Reach 5,000 steps", "100 G", steps >= 5000),
+            _buildQuestCard(context, "Marathon", "Reach 10,000 steps", "500 G", steps >= 10000),
           ],
         ),
       ),
@@ -613,10 +618,9 @@ class QuestScreen extends StatelessWidget {
 
   Widget _buildQuestCard(BuildContext context, String title, String desc, String reward, bool completed) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      color: completed ? Colors.green[900]!.withOpacity(0.3) : Theme.of(context).cardTheme.color,
+      color: completed ? Colors.green[900]!.withOpacity(0.3) : null,
       child: ListTile(
-        leading: Icon(completed ? Icons.check_circle : Icons.assignment, color: completed ? Colors.green : Colors.grey),
+        leading: Icon(completed ? Icons.check_circle : Icons.circle_outlined, color: completed ? Colors.green : Colors.grey),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
         subtitle: Text(desc),
         trailing: Chip(label: Text(reward), backgroundColor: Colors.amber[800]),
@@ -629,45 +633,10 @@ class QuestScreen extends StatelessWidget {
 class GuildScreen extends StatelessWidget {
   final AppState appState;
   const GuildScreen({super.key, required this.appState});
-
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Center(child: Icon(Icons.shield_moon, size: 60, color: Colors.blue)),
-            const SizedBox(height: 10),
-            const Center(child: Text("Walking Warriors", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
-            const Center(child: Text("Guild Level 3", style: TextStyle(color: Colors.blue))),
-            const SizedBox(height: 30),
-            
-            Text("Members", style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 10),
-            Expanded(
-              child: ListView(
-                children: [
-                  _buildMemberTile(appState.user?.heroName ?? "You", "Leader", appState.user?.currentSteps ?? 0, true),
-                  _buildMemberTile("SpeedyGonz", "Officer", 12500, false),
-                  _buildMemberTile("LazyBones", "Member", 420, false),
-                  _buildMemberTile("ForestGump", "Member", 25000, false),
-                ],
-              ),
-            )
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMemberTile(String name, String rank, int steps, bool isMe) {
-    return ListTile(
-      leading: CircleAvatar(child: Text(name[0])),
-      title: Text(name + (isMe ? " (You)" : ""), style: TextStyle(color: isMe ? Colors.amber : Colors.white)),
-      subtitle: Text(rank),
-      trailing: Text("$steps steps", style: const TextStyle(fontWeight: FontWeight.bold)),
+      child: Center(child: Text("Guilds Coming in Week 3!")), // Placeholder for now
     );
   }
 }
@@ -676,12 +645,10 @@ class GuildScreen extends StatelessWidget {
 class ProfileScreen extends StatelessWidget {
   final AppState appState;
   const ProfileScreen({super.key, required this.appState});
-
   @override
   Widget build(BuildContext context) {
     final user = appState.user;
     if (user == null) return const SizedBox.shrink();
-
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -695,6 +662,20 @@ class ProfileScreen extends StatelessWidget {
             const SizedBox(height: 16),
             Text(user.heroName, style: Theme.of(context).textTheme.headlineMedium),
             Text("Level ${user.level} ${user.heroClass}", style: const TextStyle(color: Color(0xFFEAB308))),
+            
+            // [NEW] XP Bar
+            const SizedBox(height: 8),
+            SizedBox(
+              width: 200,
+              child: LinearProgressIndicator(
+                value: user.xp / user.xpToNextLevel,
+                backgroundColor: Colors.grey[800],
+                color: Colors.purpleAccent,
+                minHeight: 10,
+              ),
+            ),
+            Text("${user.xp} / ${user.xpToNextLevel} XP", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+
             const SizedBox(height: 32),
             Expanded(
               child: GridView.count(
@@ -706,7 +687,7 @@ class ProfileScreen extends StatelessWidget {
                   _buildStatCard(context, "Strength", "24"),
                   _buildStatCard(context, "Agility", "18"),
                   _buildStatCard(context, "Total Steps", "${user.currentSteps}"),
-                  _buildStatCard(context, "Battles", "0"),
+                  _buildStatCard(context, "Gold", "${user.gold}"),
                 ],
               ),
             ),
