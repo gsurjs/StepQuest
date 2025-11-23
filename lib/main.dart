@@ -8,14 +8,14 @@ import 'dart:async';
 import 'dart:math';
 
 // ==========================================
-// MODELS (Week 1, Days 3-4: Schema)
+// 1. MODELS 
 // ==========================================
 
 class UserModel {
   final String uid;
   final String email;
   final String heroName;
-  final String heroClass; // Warrior, Rogue, Mage
+  final String heroClass;
   final int level;
   final int currentSteps;
   final int maxEnergy;
@@ -47,22 +47,22 @@ class UserModel {
 }
 
 // ==========================================
-// STATE MANAGEMENT & AUTH (Week 1, Days 1-2)
+// 2. STATE MANAGEMENT & AUTH
 // ==========================================
 
 class AppState extends ChangeNotifier {
-  // Initialize our custom AuthService
   final AuthService _authService = AuthService();
   final DatabaseService _dbService = DatabaseService();
-  
-  // Pedometer init service and subscription
   final StepService _stepService = StepService();
   StreamSubscription? _stepSubscription;
-
-
-  // Track the real Firebase User
+  
   User? _firebaseUser;
   UserModel? _currentUser;
+
+  // [BATTLE NEW] Battle State
+  int monsterHp = 100;
+  int monsterMaxHp = 100;
+  String battleLog = "A wild Goblin appeared!";
 
   bool get isAuthenticated => _firebaseUser != null;
   UserModel? get user => _currentUser;
@@ -71,112 +71,133 @@ class AppState extends ChangeNotifier {
     _init();
   }
 
-  // Setup the Listener
-  // This function runs automatically whenever you log in or log out
   void _init() {
     _authService.authStateChanges.listen((User? user) async {
       _firebaseUser = user;
-      
       if (user != null) {
-        print("✅ Auth Detected. Fetching RPG Stats for: ${user.email}");
-        // [3] UPDATED: Fetch REAL data from Firestore
         _currentUser = await _dbService.getUser(user.uid);
-        
-        // Fallback if DB entry is missing (shouldn't happen if register works)
-        if (_currentUser == null) {
-           print("⚠️ No DB entry found. Using Mock.");
-           _currentUser = UserModel.mock();
-        }
-
-        _initPedometer(); // Start listening to steps
+        if (_currentUser == null) _currentUser = UserModel.mock();
+        _initPedometer();
       } else {
-        print("ℹ️ User is logged out");
         _currentUser = null;
-        //stop listening on logout to save battery
-        _stepSubscription?.cancel();
+        _stepSubscription?.cancel(); 
       }
       notifyListeners();
     });
   }
-  // Logic to handle step events
+
   Future<void> _initPedometer() async {
     bool granted = await _stepService.init();
     if (granted) {
-      print("✅ Pedometer Permission Granted");
-      _stepSubscription = _stepService.stepStream.listen(
-        (stepEvent) {
-          print("👣 Steps Update: ${stepEvent.steps}");
-          
-          if (_currentUser != null) {
-            // We create a NEW user object with the updated steps
-            // (Because our UserModel fields are 'final' and cannot be changed directly)
-            _currentUser = UserModel(
-              uid: _currentUser!.uid,
-              email: _currentUser!.email,
-              heroName: _currentUser!.heroName,
-              heroClass: _currentUser!.heroClass,
-              level: _currentUser!.level,
-              // UPDATE THIS FIELD:
-              currentSteps: stepEvent.steps, 
-              maxEnergy: _currentUser!.maxEnergy,
-              currentEnergy: _currentUser!.currentEnergy,
-              gold: _currentUser!.gold,
-            );
-            
-            // Tell the UI to repaint
-            notifyListeners(); 
-          }
-        },
-        onError: (error) => print("❌ Pedometer Error: $error"),
-      );
-    } else {
-      print("⚠️ Pedometer Permission Denied");
+      _stepSubscription = _stepService.stepStream.listen((stepEvent) {
+          // Note: Pedometer sends cumulative steps. 
+          // For this MVP simulation, we rely on manual updates via the button
+          // to prevent overwriting our "spent" steps logic.
+      });
     }
   }
 
-  // Calls authService
-  Future<void> login(String email, String password) async {
-    await _authService.signIn(email, password);
+  // [DEV TOOL] Manual Step Increment
+  void debugAddSteps(int amount) {
+    if (_currentUser != null) {
+      _updateUserData(steps: _currentUser!.currentSteps + amount);
+    }
   }
 
-  // Registration logic
-  // Registration now saves to Database
-  Future<void> register(String email, String password) async {
-    // 1. Create Auth Account
-    User? user = await _authService.signUp(email, password);
-    
-    // Create Firestore Entry (Default Hero)
-    if (user != null) {
-      UserModel newUser = UserModel(
-        uid: user.uid, 
-        email: email, 
-        heroName: "New Hero", 
-        heroClass: "Warrior"
+  // Helper to update user state safely
+  void _updateUserData({int? steps, int? gold, int? energy}) {
+     if (_currentUser != null) {
+        _currentUser = UserModel(
+        uid: _currentUser!.uid,
+        email: _currentUser!.email,
+        heroName: _currentUser!.heroName,
+        heroClass: _currentUser!.heroClass,
+        level: _currentUser!.level,
+        currentSteps: steps ?? _currentUser!.currentSteps,
+        maxEnergy: _currentUser!.maxEnergy,
+        currentEnergy: energy ?? _currentUser!.currentEnergy,
+        gold: gold ?? _currentUser!.gold,
       );
+      notifyListeners();
+      // In real app: _dbService.createUser(_currentUser!);
+     }
+  }
+
+  // [GAME LOGIC] Attack Monster
+  Future<void> attackMonster() async {
+    if (_currentUser == null) return;
+    const int cost = 100; // Cost in Steps
+
+    if (_currentUser!.currentSteps < cost) {
+      battleLog = "Need $cost steps! Walk more.";
+      notifyListeners();
+      return;
+    }
+
+    // 1. Deduct Steps (Spend them like currency)
+    int newSteps = _currentUser!.currentSteps - cost;
+    
+    // 2. Deal Damage
+    int damage = Random().nextInt(15) + 10;
+    monsterHp -= damage;
+    battleLog = "Attack ($cost steps) dealt $damage DMG!";
+
+    int newGold = _currentUser!.gold;
+
+    // 3. Check Win Condition
+    if (monsterHp <= 0) {
+      monsterHp = 100; // Respawn
+      int reward = Random().nextInt(50) + 20;
+      newGold += reward;
+      battleLog = "Enemy Defeated! Found $reward Gold.";
+    }
+
+    // 4. Update UI
+    _updateUserData(steps: newSteps, gold: newGold);
+  }
+
+  // [GAME LOGIC] Defend
+  Future<void> defendAction() async {
+    if (_currentUser == null) return;
+    const int cost = 50; 
+
+    if (_currentUser!.currentSteps < cost) {
+      battleLog = "Need $cost steps to Defend.";
+      notifyListeners();
+      return;
+    }
+
+    int newSteps = _currentUser!.currentSteps - cost;
+    battleLog = "Defend ($cost steps) - Blocked attack!";
+    _updateUserData(steps: newSteps);
+  }
+
+  Future<void> login(String email, String password) async => await _authService.signIn(email, password);
+  Future<void> register(String email, String password) async {
+    User? user = await _authService.signUp(email, password);
+    if (user != null) {
+      UserModel newUser = UserModel(uid: user.uid, email: email, heroName: "New Hero", heroClass: "Warrior");
       await _dbService.createUser(newUser);
     }
   }
-
-  Future<void> logout() async {
-    await _authService.signOut();
-  }
+  Future<void> logout() async => await _authService.signOut();
 }
 
 // ==========================================
-// THEME (Week 1, Days 5-7: UI Foundation)
+// 3. THEME
 // ==========================================
 
 class AppTheme {
   static final ThemeData darkTheme = ThemeData(
     useMaterial3: true,
     brightness: Brightness.dark,
-    scaffoldBackgroundColor: const Color(0xFF0F172A), // Slate 900
-    primaryColor: const Color(0xFFEAB308), // Yellow 500 (Gold)
+    scaffoldBackgroundColor: const Color(0xFF0F172A),
+    primaryColor: const Color(0xFFEAB308),
     colorScheme: const ColorScheme.dark(
       primary: Color(0xFFEAB308),
-      secondary: Color(0xFF3B82F6), // Blue 500
-      surface: Color(0xFF1E293B), // Slate 800
-      error: Color(0xFFEF4444), // Red 500
+      secondary: Color(0xFF3B82F6),
+      surface: Color(0xFF1E293B),
+      error: Color(0xFFEF4444),
     ),
     fontFamily: 'Georgia',
     textTheme: const TextTheme(
@@ -184,7 +205,6 @@ class AppTheme {
       titleLarge: TextStyle(fontWeight: FontWeight.bold),
       bodyMedium: TextStyle(color: Color(0xFF94A3B8)),
     ),
-
     cardTheme: CardThemeData(
       color: const Color(0xFF1E293B),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -193,21 +213,16 @@ class AppTheme {
 }
 
 // ==========================================
-// MAIN APP ENTRY POINT
+// 4. MAIN APP ENTRY POINT
 // ==========================================
 
 void main() async {
-  // Bindings must be initialized before Firebase
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Initialize Firebase
   try {
     await Firebase.initializeApp();
-    print("✅ Firebase Initialized Successfully");
   } catch (e) {
-    print("❌ Firebase Initialization Failed: $e");
+    print("Firebase Error: $e");
   }
-  
   runApp(const StepQuestApp());
 }
 
@@ -240,10 +255,10 @@ class _StepQuestAppState extends State<StepQuestApp> {
 }
 
 // ==========================================
-// SCREENS
+// 5. SCREENS
 // ==========================================
 
-// --- LOGIN SCREEN (The Tavern) ---
+// --- LOGIN SCREEN ---
 class LoginScreen extends StatefulWidget {
   final AppState appState;
   const LoginScreen({super.key, required this.appState});
@@ -254,39 +269,22 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
-  
-  // Toggle between "Login Mode" and "Register Mode"
   bool _isLogin = true; 
-  
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
-  // [8] UPDATED: The Submit Logic
   void _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
-
     setState(() => _isLoading = true);
-    
     try {
-      // If _isLogin is true, we call login(), otherwise we call register()
       if (_isLogin) {
-        await widget.appState.login(
-          _emailController.text.trim(), 
-          _passwordController.text.trim()
-        );
+        await widget.appState.login(_emailController.text.trim(), _passwordController.text.trim());
       } else {
-        await widget.appState.register(
-          _emailController.text.trim(), 
-          _passwordController.text.trim()
-        );
+        await widget.appState.register(_emailController.text.trim(), _passwordController.text.trim());
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -301,59 +299,34 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Form(
             key: _formKey,
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const Icon(Icons.directions_walk, size: 80, color: Color(0xFFEAB308)),
                 const SizedBox(height: 20),
                 Text("StepQuest", style: Theme.of(context).textTheme.displayLarge),
-                
-                // [9] UI: Change title based on mode
-                Text(
-                  _isLogin ? "Enter the Tavern" : "Join the Guild", 
-                  style: Theme.of(context).textTheme.bodyMedium
-                ),
+                Text(_isLogin ? "Enter the Tavern" : "Join the Guild", style: Theme.of(context).textTheme.bodyMedium),
                 const SizedBox(height: 48),
-                
                 TextFormField(
                   controller: _emailController,
-                  // [10] UI: Basic Validation
-                  validator: (val) => val != null && val.contains('@') ? null : 'Invalid Email',
-                  decoration: const InputDecoration(
-                    labelText: "Email",
-                    prefixIcon: Icon(Icons.email),
-                    border: OutlineInputBorder(),
-                  ),
+                  validator: (val) => val!.contains('@') ? null : 'Invalid Email',
+                  decoration: const InputDecoration(labelText: "Email", prefixIcon: Icon(Icons.email), border: OutlineInputBorder()),
                 ),
                 const SizedBox(height: 16),
-                
                 TextFormField(
                   controller: _passwordController,
-                  validator: (val) => val != null && val.length > 5 ? null : 'Password too short',
+                  validator: (val) => val!.length > 5 ? null : 'Password too short',
                   obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: "Password",
-                    prefixIcon: Icon(Icons.lock),
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: const InputDecoration(labelText: "Password", prefixIcon: Icon(Icons.lock), border: OutlineInputBorder()),
                 ),
                 const SizedBox(height: 24),
-                
                 SizedBox(
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _handleSubmit,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Theme.of(context).primaryColor,
-                      foregroundColor: Colors.black,
-                    ),
-                    child: _isLoading 
-                      ? const CircularProgressIndicator() 
-                      : Text(_isLogin ? "LOGIN" : "REGISTER", style: const TextStyle(fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.black),
+                    child: _isLoading ? const CircularProgressIndicator() : Text(_isLogin ? "LOGIN" : "REGISTER", style: const TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ),
-                
-                // [11] UI: Button to toggle modes
                 TextButton(
                   onPressed: () => setState(() => _isLogin = !_isLogin),
                   child: Text(_isLogin ? "New Hero? Create Account" : "Already have a hero? Login"),
@@ -367,7 +340,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-// --- MAIN SCAFFOLD (Navigation Controller) ---
+// --- MAIN SCAFFOLD ---
 class MainScaffold extends StatefulWidget {
   final AppState appState;
   const MainScaffold({super.key, required this.appState});
@@ -378,24 +351,20 @@ class MainScaffold extends StatefulWidget {
 
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
-  late final List<Widget> _screens;
-
-  @override
-  void initState() {
-    super.initState();
-    _screens = [
-      DashboardScreen(appState: widget.appState),
-      const Center(child: Text("Battle Arena\n(Coming Week 2)")),
-      const Center(child: Text("Quest Board\n(Coming Week 3)")),
-      const Center(child: Text("Guild Hall\n(Coming Week 3)")),
-      ProfileScreen(appState: widget.appState),
-    ];
-  }
 
   @override
   Widget build(BuildContext context) {
+    // [FIXED] Screens are defined inside build() so they update correctly
+    final List<Widget> screens = [
+      DashboardScreen(appState: widget.appState),
+      BattleScreen(appState: widget.appState), // [NEW]
+      QuestScreen(appState: widget.appState),  // [NEW]
+      GuildScreen(appState: widget.appState),  // [NEW]
+      ProfileScreen(appState: widget.appState),
+    ];
+
     return Scaffold(
-      body: _screens[_selectedIndex],
+      body: screens[_selectedIndex],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (idx) => setState(() => _selectedIndex = idx),
@@ -413,80 +382,292 @@ class _MainScaffoldState extends State<MainScaffold> {
   }
 }
 
-// --- DASHBOARD SCREEN (World Map) ---
+// --- DASHBOARD SCREEN ---
 class DashboardScreen extends StatelessWidget {
   final AppState appState;
   const DashboardScreen({super.key, required this.appState});
 
   @override
   Widget build(BuildContext context) {
-    final user = appState.user!;
-    
+    final user = appState.user;
+    if (user == null) return const Center(child: CircularProgressIndicator());
+
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => appState.debugAddSteps(500),
+        label: const Text("Simulate 500 Steps"),
+        icon: const Icon(Icons.directions_run),
+        backgroundColor: Colors.green,
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Welcome back,", style: Theme.of(context).textTheme.bodySmall),
+                      Text(user.heroName, style: Theme.of(context).textTheme.titleLarge?.copyWith(color: const Color(0xFFEAB308))),
+                    ],
+                  ),
+                  Chip(
+                    avatar: const Icon(Icons.monetization_on, size: 16, color: Colors.black),
+                    label: Text("${user.gold} G", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
+                    backgroundColor: const Color(0xFFEAB308),
+                  )
+                ],
+              ),
+              const SizedBox(height: 40),
+              Center(
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: 200,
+                      height: 200,
+                      child: CircularProgressIndicator(
+                        value: (user.currentSteps / 10000).clamp(0.0, 1.0),
+                        strokeWidth: 20,
+                        backgroundColor: Theme.of(context).colorScheme.surface,
+                        color: Colors.green,
+                      ),
+                    ),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.directions_walk, size: 40, color: Colors.green),
+                        Text("${user.currentSteps}", style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold)),
+                        const Text("STEPS", style: TextStyle(letterSpacing: 2, fontSize: 10)),
+                      ],
+                    )
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// --- BATTLE SCREEN ---
+class BattleScreen extends StatelessWidget {
+  final AppState appState;
+  const BattleScreen({super.key, required this.appState});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        children: [
+          // 1. The Scene
+          Expanded(
+            flex: 2,
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                border: Border(bottom: BorderSide(color: Colors.grey[800]!, width: 4)),
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Positioned(
+                    top: 40,
+                    child: SizedBox(
+                      width: 200,
+                      child: Column(
+                        children: [
+                          Text("Forest Goblin", style: TextStyle(color: Colors.red[300], fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 4),
+                          LinearProgressIndicator(
+                            value: appState.monsterHp / appState.monsterMaxHp,
+                            color: Colors.red,
+                            backgroundColor: Colors.red[900],
+                            minHeight: 8,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const Text("👺", style: TextStyle(fontSize: 100)),
+                ],
+              ),
+            ),
+          ),
+
+          // 2. Controls
+          Expanded(
+            flex: 3,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              color: const Color(0xFF0F172A),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Steps Bank Display
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(color: Colors.green[900]!.withOpacity(0.3), borderRadius: BorderRadius.circular(8)),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.directions_walk, color: Colors.green),
+                        const SizedBox(width: 8),
+                        Text("Available Steps: ${appState.user?.currentSteps ?? 0}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+
+                  // Log
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: Colors.black38,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey[800]!),
+                    ),
+                    child: Center(
+                      child: Text(
+                        appState.battleLog,
+                        style: const TextStyle(fontFamily: 'Courier', color: Colors.greenAccent),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  
+                  // Actions
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => appState.attackMonster(),
+                          icon: const Icon(Icons.flash_on),
+                          label: const Text("ATTACK\n(100 Steps)"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red[700],
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => appState.defendAction(),
+                          icon: const Icon(Icons.shield),
+                          label: const Text("DEFEND\n(50 Steps)"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue[800],
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// --- QUEST SCREEN (NEW) ---
+class QuestScreen extends StatelessWidget {
+  final AppState appState;
+  const QuestScreen({super.key, required this.appState});
+
+  @override
+  Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("Welcome back,", style: Theme.of(context).textTheme.bodySmall),
-                    Text(user.heroName, style: Theme.of(context).textTheme.titleLarge?.copyWith(color: const Color(0xFFEAB308))),
-                  ],
-                ),
-                Chip(
-                  avatar: const Icon(Icons.monetization_on, size: 16, color: Colors.black),
-                  label: Text("${user.gold} G", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
-                  backgroundColor: const Color(0xFFEAB308),
-                )
-              ],
-            ),
-            const SizedBox(height: 40),
-
-            Center(
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SizedBox(
-                    width: 200,
-                    height: 200,
-                    child: CircularProgressIndicator(
-                      value: user.currentSteps / 10000,
-                      strokeWidth: 20,
-                      backgroundColor: Theme.of(context).colorScheme.surface,
-                      color: Colors.green,
-                    ),
-                  ),
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.directions_walk, size: 40, color: Colors.green),
-                      Text("${user.currentSteps}", style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold)),
-                      const Text("STEPS", style: TextStyle(letterSpacing: 2, fontSize: 10)),
-                    ],
-                  )
-                ],
-              ),
-            ),
-            const SizedBox(height: 40),
-
-            const Text("Energy"),
-            const SizedBox(height: 8),
-            LinearProgressIndicator(
-              value: user.currentEnergy / user.maxEnergy,
-              backgroundColor: Theme.of(context).colorScheme.surface,
-              color: Colors.blue,
-              minHeight: 10,
-            ),
-            const SizedBox(height: 4),
-            Text("${user.currentEnergy}/${user.maxEnergy}", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            Text("Quest Board", style: Theme.of(context).textTheme.displayLarge),
+            const Text("Daily challenges reset at midnight.", style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 20),
+            _buildQuestCard(context, "Morning Jog", "Walk 1,000 steps", "50 G", true),
+            _buildQuestCard(context, "Warrior's Path", "Defeat 3 Goblins", "100 G", false),
+            _buildQuestCard(context, "Marathon", "Walk 10,000 steps", "500 G", false),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildQuestCard(BuildContext context, String title, String desc, String reward, bool completed) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      color: completed ? Colors.green[900]!.withOpacity(0.3) : Theme.of(context).cardTheme.color,
+      child: ListTile(
+        leading: Icon(completed ? Icons.check_circle : Icons.assignment, color: completed ? Colors.green : Colors.grey),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text(desc),
+        trailing: Chip(label: Text(reward), backgroundColor: Colors.amber[800]),
+      ),
+    );
+  }
+}
+
+// --- GUILD SCREEN ---
+class GuildScreen extends StatelessWidget {
+  final AppState appState;
+  const GuildScreen({super.key, required this.appState});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Center(child: Icon(Icons.shield_moon, size: 60, color: Colors.blue)),
+            const SizedBox(height: 10),
+            const Center(child: Text("Walking Warriors", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
+            const Center(child: Text("Guild Level 3", style: TextStyle(color: Colors.blue))),
+            const SizedBox(height: 30),
+            
+            Text("Members", style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 10),
+            Expanded(
+              child: ListView(
+                children: [
+                  _buildMemberTile(appState.user?.heroName ?? "You", "Leader", appState.user?.currentSteps ?? 0, true),
+                  _buildMemberTile("SpeedyGonz", "Officer", 12500, false),
+                  _buildMemberTile("LazyBones", "Member", 420, false),
+                  _buildMemberTile("ForestGump", "Member", 25000, false),
+                ],
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMemberTile(String name, String rank, int steps, bool isMe) {
+    return ListTile(
+      leading: CircleAvatar(child: Text(name[0])),
+      title: Text(name + (isMe ? " (You)" : ""), style: TextStyle(color: isMe ? Colors.amber : Colors.white)),
+      subtitle: Text(rank),
+      trailing: Text("$steps steps", style: const TextStyle(fontWeight: FontWeight.bold)),
     );
   }
 }
@@ -498,7 +679,9 @@ class ProfileScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = appState.user!;
+    final user = appState.user;
+    if (user == null) return const SizedBox.shrink();
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -513,7 +696,6 @@ class ProfileScreen extends StatelessWidget {
             Text(user.heroName, style: Theme.of(context).textTheme.headlineMedium),
             Text("Level ${user.level} ${user.heroClass}", style: const TextStyle(color: Color(0xFFEAB308))),
             const SizedBox(height: 32),
-            
             Expanded(
               child: GridView.count(
                 crossAxisCount: 2,
@@ -523,12 +705,11 @@ class ProfileScreen extends StatelessWidget {
                 children: [
                   _buildStatCard(context, "Strength", "24"),
                   _buildStatCard(context, "Agility", "18"),
-                  _buildStatCard(context, "Total Steps", "145k"),
-                  _buildStatCard(context, "Battles", "32"),
+                  _buildStatCard(context, "Total Steps", "${user.currentSteps}"),
+                  _buildStatCard(context, "Battles", "0"),
                 ],
               ),
             ),
-            
             SizedBox(
               width: double.infinity,
               child: OutlinedButton(
