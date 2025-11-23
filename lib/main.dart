@@ -306,6 +306,10 @@ class AppState extends ChangeNotifier {
       _dbService.createUser(_currentUser!);
      }
   }
+  // Leaderboard
+  Future<List<GuildModel>> getLeaderboard() async {
+    return await _dbService.getTopGuilds();
+  }
 
   // Guild Wrappers
   Future<void> createGuild(String name) async {
@@ -793,6 +797,42 @@ class GuildScreen extends StatelessWidget {
   final AppState appState;
   const GuildScreen({super.key, required this.appState});
 
+  // [LEADERBOARD NEW] Dialog to show top guilds
+  void _showLeaderboard(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => FutureBuilder<List<GuildModel>>(
+        future: appState.getLeaderboard(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const AlertDialog(content: LinearProgressIndicator());
+          final guilds = snapshot.data!;
+          return AlertDialog(
+            title: const Text("🏆 Top Guilds"),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: guilds.isEmpty 
+                ? const Text("No guilds found.") 
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: guilds.length,
+                    itemBuilder: (ctx, i) => ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: i == 0 ? Colors.amber : Colors.grey[800],
+                        foregroundColor: i == 0 ? Colors.black : Colors.white,
+                        child: Text("#${i+1}"),
+                      ),
+                      title: Text(guilds[i].name),
+                      trailing: Text("${guilds[i].totalSteps} 👣"),
+                    ),
+                  ),
+            ),
+            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("CLOSE"))],
+          );
+        },
+      ),
+    );
+  }
+
   void _showJoinDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -803,7 +843,26 @@ class GuildScreen extends StatelessWidget {
           final guilds = snapshot.data!;
           return AlertDialog(
             title: const Text("Join a Guild"),
-            content: SizedBox(width: double.maxFinite, child: guilds.isEmpty ? const Text("No guilds found. Create one!") : ListView.builder(shrinkWrap: true, itemCount: guilds.length, itemBuilder: (ctx, i) => ListTile(title: Text(guilds[i].name), subtitle: Text("${guilds[i].members.length} members"), trailing: ElevatedButton(onPressed: () { appState.joinGuild(guilds[i].id); Navigator.pop(context); }, child: const Text("JOIN"))))),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: guilds.isEmpty 
+                ? const Text("No guilds found. Create one!") 
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: guilds.length,
+                    itemBuilder: (ctx, i) => ListTile(
+                      title: Text(guilds[i].name),
+                      subtitle: Text("${guilds[i].members.length} members"),
+                      trailing: ElevatedButton(
+                        onPressed: () {
+                          appState.joinGuild(guilds[i].id);
+                          Navigator.pop(context);
+                        },
+                        child: const Text("JOIN"),
+                      ),
+                    ),
+                  ),
+            ),
             actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL"))],
           );
         },
@@ -828,6 +887,7 @@ class GuildScreen extends StatelessWidget {
               Text("No Guild", style: Theme.of(context).textTheme.displayMedium),
               const Text("Join forces with others to earn bonus loot!", textAlign: TextAlign.center),
               const SizedBox(height: 32),
+              
               TextField(
                 controller: guildNameController,
                 decoration: const InputDecoration(labelText: "Guild Name", border: OutlineInputBorder()),
@@ -865,7 +925,19 @@ class GuildScreen extends StatelessWidget {
             const SizedBox(height: 10),
             Center(child: Text(guild.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
             const Center(child: Text("Guild Level 1", style: TextStyle(color: Colors.blue))),
-            const SizedBox(height: 30),
+            const SizedBox(height: 10),
+            
+            // [LEADERBOARD NEW] Button to show leaderboard
+            Center(
+              child: ElevatedButton.icon(
+                onPressed: () => _showLeaderboard(context),
+                icon: const Icon(Icons.leaderboard),
+                label: const Text("Global Leaderboard"),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
+              ),
+            ),
+
+            const SizedBox(height: 20),
             Card(
               child: ListTile(
                 leading: const Icon(Icons.hiking, color: Colors.green),
@@ -873,6 +945,7 @@ class GuildScreen extends StatelessWidget {
                 trailing: Text("${guild.totalSteps}", style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
             ),
+            
             const SizedBox(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -884,6 +957,7 @@ class GuildScreen extends StatelessWidget {
                 )
               ],
             ),
+            
             Expanded(
               child: ListView.builder(
                 itemCount: guild.members.length,

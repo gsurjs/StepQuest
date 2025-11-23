@@ -69,6 +69,23 @@ class DatabaseService {
       return [];
     }
   }
+
+  //Get Top 10 Guilds by Steps
+  Future<List<GuildModel>> getTopGuilds() async {
+    try {
+      QuerySnapshot snapshot = await _guilds
+          .orderBy('totalSteps', descending: true)
+          .limit(10)
+          .get();
+      return snapshot.docs
+          .map((doc) => GuildModel.fromMap(doc.data() as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      print("Error fetching leaderboard: $e");
+      return [];
+    }
+  }
+
   // Join Guild
   Future<void> joinGuild(String guildId, UserModel user) async {
     DocumentReference guildRef = _guilds.doc(guildId);
