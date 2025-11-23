@@ -656,14 +656,57 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
-class BattleScreen extends StatelessWidget {
+class BattleScreen extends StatefulWidget {
   final AppState appState;
   const BattleScreen({super.key, required this.appState});
+
+  @override
+  State<BattleScreen> createState() => _BattleScreenState();
+}
+
+class _BattleScreenState extends State<BattleScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _shakeController;
+  late Animation<double> _offsetAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    // Setup a quick "Shake" animation
+    _shakeController = AnimationController(
+      duration: const Duration(milliseconds: 100),
+      vsync: this,
+    );
+    
+    // Move left-to-right 10 pixels
+    _offsetAnimation = Tween<double>(begin: 0, end: 10.0)
+        .chain(CurveTween(curve: Curves.elasticIn))
+        .animate(_shakeController)
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          _shakeController.reverse();
+        }
+      });
+  }
+
+  @override
+  void dispose() {
+    _shakeController.dispose();
+    super.dispose();
+  }
+
+  void _handleAttack() async {
+    // Trigger visual effect
+    _shakeController.forward(from: 0.0);
+    // Trigger logic
+    await widget.appState.attackMonster();
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Column(
         children: [
+          // 1. The Scene
           Expanded(
             flex: 2,
             child: Container(
@@ -672,6 +715,7 @@ class BattleScreen extends StatelessWidget {
               child: Stack(
                 alignment: Alignment.center,
                 children: [
+                  // HP Bar
                   Positioned(
                     top: 40,
                     child: Column(
@@ -681,7 +725,7 @@ class BattleScreen extends StatelessWidget {
                         SizedBox(
                           width: 200,
                           child: LinearProgressIndicator(
-                            value: appState.monsterHp / appState.monsterMaxHp,
+                            value: widget.appState.monsterHp / widget.appState.monsterMaxHp,
                             color: Colors.red,
                             backgroundColor: Colors.red[900],
                           ),
@@ -689,11 +733,23 @@ class BattleScreen extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const Text("👺", style: TextStyle(fontSize: 100)),
+                  
+                  // Animated Monster
+                  AnimatedBuilder(
+                    animation: _offsetAnimation,
+                    builder: (context, child) {
+                      return Transform.translate(
+                        offset: Offset(_offsetAnimation.value, 0),
+                        child: const Text("👺", style: TextStyle(fontSize: 100)),
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
           ),
+
+          // 2. Controls
           Expanded(
             flex: 3,
             child: Container(
@@ -710,37 +766,53 @@ class BattleScreen extends StatelessWidget {
                       children: [
                         const Icon(Icons.directions_walk, color: Colors.green),
                         const SizedBox(width: 8),
-                        Text("Available Steps: ${appState.user?.currentSteps ?? 0}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Text("Available Steps: ${widget.appState.user?.currentSteps ?? 0}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ),
+                  
+                  // Battle Log
                   Container(
                     padding: const EdgeInsets.all(12),
                     width: double.infinity,
                     height: 60,
                     decoration: BoxDecoration(color: Colors.black38, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey[800]!)),
                     child: Center(
-                      child: Text(appState.battleLog, style: const TextStyle(fontFamily: 'Courier', color: Colors.greenAccent), textAlign: TextAlign.center),
+                      child: Text(
+                        widget.appState.battleLog, 
+                        style: const TextStyle(fontFamily: 'Courier', color: Colors.greenAccent), 
+                        textAlign: TextAlign.center
+                      ),
                     ),
                   ),
                   const Spacer(),
+                  
+                  // Action Buttons
                   Row(
                     children: [
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: () => appState.attackMonster(),
+                          onPressed: _handleAttack,
                           icon: const Icon(Icons.flash_on),
                           label: const Text("ATTACK\n(100 Steps)"),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red[700], foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red[700], 
+                            foregroundColor: Colors.white, 
+                            padding: const EdgeInsets.symmetric(vertical: 15)
+                          ),
                         ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: () => appState.defendAction(),
+                          onPressed: () => widget.appState.defendAction(),
                           icon: const Icon(Icons.shield),
                           label: const Text("DEFEND\n(50 Steps)"),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 15)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue[800], 
+                            foregroundColor: Colors.white, 
+                            padding: const EdgeInsets.symmetric(vertical: 15)
+                          ),
                         ),
                       ),
                     ],
