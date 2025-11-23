@@ -127,9 +127,9 @@ class AppState extends ChangeNotifier {
   
   User? _firebaseUser;
   UserModel? _currentUser;
-  GuildModel? _currentGuild; // Track active guild
+  GuildModel? _currentGuild; 
 
-  // [BATTLE NEW] Battle State
+  // Battle State
   int monsterHp = 100;
   int monsterMaxHp = 100;
   String battleLog = "A wild Goblin appeared!";
@@ -156,13 +156,15 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     });
   }
+
   Future<void> _loadUserData(String uid) async {
     _currentUser = await _dbService.getUser(uid);
     if (_currentUser == null) {
        _currentUser = UserModel.mock();
     } else if (_currentUser!.guildId != null) {
-       // If user has a guild, fetch it too
        _currentGuild = await _dbService.getGuild(_currentUser!.guildId!);
+    } else {
+      _currentGuild = null;
     }
     notifyListeners();
   }
@@ -171,21 +173,17 @@ class AppState extends ChangeNotifier {
     bool granted = await _stepService.init();
     if (granted) {
       _stepSubscription = _stepService.stepStream.listen((stepEvent) {
-          // Note: Pedometer sends cumulative steps. 
-          // For this MVP simulation, we rely on manual updates via the button
-          // to prevent overwriting our "spent" steps logic.
+          // Real implementation would go here
       });
     }
   }
 
-  // [DEV TOOL] Manual Step Increment
   void debugAddSteps(int amount) {
     if (_currentUser != null) {
       _updateUserData(steps: _currentUser!.currentSteps + amount);
     }
   }
 
-   // [PERSISTENCE] Helper to update user state AND save to DB
   void _updateUserData({int? steps, int? gold, int? xp, int? level, int? nextXp}) {
      if (_currentUser != null) {
         _currentUser = UserModel(
@@ -200,22 +198,37 @@ class AppState extends ChangeNotifier {
         maxEnergy: _currentUser!.maxEnergy,
         currentEnergy: _currentUser!.currentEnergy,
         gold: gold ?? _currentUser!.gold,
+        guildId: _currentUser!.guildId,
       );
       notifyListeners();
-      
-      // [CRITICAL] Save to Firestore!
       _dbService.createUser(_currentUser!);
      }
   }
 
-
   // [GUILD LOGIC] Create
   Future<void> createGuild(String name) async {
     if (_currentUser == null) return;
-    
     await _dbService.createGuild(name, _currentUser!);
-    // Reload data to fetch the new guild ID and object
     await _loadUserData(_currentUser!.uid);
+  }
+
+  // [GUILD LOGIC] Join
+  Future<void> joinGuild(String guildId) async {
+    if (_currentUser == null) return;
+    await _dbService.joinGuild(guildId, _currentUser!);
+    await _loadUserData(_currentUser!.uid);
+  }
+
+  // [GUILD LOGIC] Leave
+  Future<void> leaveGuild() async {
+    if (_currentUser == null || _currentGuild == null) return;
+    await _dbService.leaveGuild(_currentGuild!.id, _currentUser!);
+    await _loadUserData(_currentUser!.uid);
+  }
+  
+  // [GUILD LOGIC] Fetch List
+  Future<List<GuildModel>> getAvailableGuilds() async {
+    return await _dbService.getAllGuilds();
   }
 
   // [BATTLE LOGIC]
@@ -681,6 +694,44 @@ class GuildScreen extends StatelessWidget {
   final AppState appState;
   const GuildScreen({super.key, required this.appState});
 
+  void _showJoinDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => FutureBuilder<List<GuildModel>>(
+        future: appState.getAvailableGuilds(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const AlertDialog(content: LinearProgressIndicator());
+          
+          final guilds = snapshot.data!;
+          return AlertDialog(
+            title: const Text("Join a Guild"),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: guilds.isEmpty 
+                ? const Text("No guilds found. Create one!") 
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: guilds.length,
+                    itemBuilder: (ctx, i) => ListTile(
+                      title: Text(guilds[i].name),
+                      subtitle: Text("${guilds[i].members.length} members"),
+                      trailing: ElevatedButton(
+                        onPressed: () {
+                          appState.joinGuild(guilds[i].id);
+                          Navigator.pop(context);
+                        },
+                        child: const Text("JOIN"),
+                      ),
+                    ),
+                  ),
+            ),
+            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL"))],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final guild = appState.guild;
@@ -717,7 +768,11 @@ class GuildScreen extends StatelessWidget {
                   child: const Text("CREATE NEW GUILD", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 ),
               ),
-              TextButton(onPressed: () {}, child: const Text("Join Existing Guild (Coming Soon)"))
+              // [UPDATED] Join Button Logic
+              TextButton(
+                onPressed: () => _showJoinDialog(context), 
+                child: const Text("Join Existing Guild")
+              )
             ],
           ),
         ),
@@ -737,7 +792,6 @@ class GuildScreen extends StatelessWidget {
             const Center(child: Text("Guild Level 1", style: TextStyle(color: Colors.blue))),
             const SizedBox(height: 30),
             
-            // Guild Stats
             Card(
               child: ListTile(
                 leading: const Icon(Icons.hiking, color: Colors.green),
@@ -747,7 +801,18 @@ class GuildScreen extends StatelessWidget {
             ),
             
             const SizedBox(height: 20),
-            Text("Members (${guild.members.length})", style: Theme.of(context).textTheme.titleLarge),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text("Members (${guild.members.length})", style: Theme.of(context).textTheme.titleLarge),
+                // [NEW] Leave Button
+                TextButton(
+                  onPressed: () => appState.leaveGuild(), 
+                  child: const Text("Leave Guild", style: TextStyle(color: Colors.red))
+                )
+              ],
+            ),
+            
             Expanded(
               child: ListView.builder(
                 itemCount: guild.members.length,

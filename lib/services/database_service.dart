@@ -37,11 +37,11 @@ class DatabaseService {
       totalSteps: creator.currentSteps,
     );
 
-    // 2. Save Guild
-    await guildRef.set(newGuild.toMap());
-
-    // 3. Update Creator's Profile to include this Guild ID
-    await _users.doc(creator.uid).update({'guildId': newGuild.id});
+    // Atomic Transaction: Create Guild AND Update User
+    await _db.runTransaction((transaction) async {
+      transaction.set(guildRef, newGuild.toMap());
+      transaction.update(_users.doc(creator.uid), {'guildId': newGuild.id});
+    });
   }
 
   Future<GuildModel?> getGuild(String guildId) async {
@@ -57,23 +57,51 @@ class DatabaseService {
     }
   }
 
-  // Join an existing guild (Simple version: joins by ID)
+  // List all guilds for the Join screen
+  Future<List<GuildModel>> getAllGuilds() async {
+    try {
+      QuerySnapshot snapshot = await _guilds.get();
+      return snapshot.docs
+          .map((doc) => GuildModel.fromMap(doc.data() as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      print("Error fetching guilds: $e");
+      return [];
+    }
+  }
+  // Join Guild
   Future<void> joinGuild(String guildId, UserModel user) async {
     DocumentReference guildRef = _guilds.doc(guildId);
     
-    // Atomic Transaction: Add user to array, increment step count
     await _db.runTransaction((transaction) async {
       DocumentSnapshot snapshot = await transaction.get(guildRef);
       if (!snapshot.exists) throw Exception("Guild does not exist!");
 
-      // Update Guild
+      // Add user to members array and add their steps to total
       transaction.update(guildRef, {
         'members': FieldValue.arrayUnion([user.uid]),
         'totalSteps': FieldValue.increment(user.currentSteps),
       });
 
-      // Update User
+      // Update user profile
       transaction.update(_users.doc(user.uid), {'guildId': guildId});
+    });
+  }
+  
+  // Leave Guild logic
+  Future<void> leaveGuild(String guildId, UserModel user) async {
+    DocumentReference guildRef = _guilds.doc(guildId);
+    
+    await _db.runTransaction((transaction) async {
+      DocumentSnapshot snapshot = await transaction.get(guildRef);
+      if (!snapshot.exists) return;
+
+      transaction.update(guildRef, {
+        'members': FieldValue.arrayRemove([user.uid]),
+        'totalSteps': FieldValue.increment(-user.currentSteps), // Remove their contribution
+      });
+
+      transaction.update(_users.doc(user.uid), {'guildId': null});
     });
   }
 }
