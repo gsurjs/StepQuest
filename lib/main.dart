@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart'; 
+import 'package:cloud_firestore/cloud_firestore.dart'; // Needed for Timestamp
 import 'package:step_quest/services/auth_service.dart'; 
 import 'package:step_quest/services/database_service.dart';
 import 'package:step_quest/services/step_service.dart';
@@ -17,13 +18,16 @@ class UserModel {
   final String heroName;
   final String heroClass;
   final int level;
-  final int xp; //adding curr xp
-  final int xpToNextLevel; //adding xp needed for next level
+  final int xp;
+  final int xpToNextLevel;
   final int currentSteps;
   final int maxEnergy;
   final int currentEnergy;
   final int gold;
-  final String? guildId; // link to guild
+  final String? guildId;
+  // Tracking daily progress
+  final DateTime? lastLoginDate;
+  final List<String> claimedQuestIds;
 
   UserModel({
     required this.uid,
@@ -37,10 +41,11 @@ class UserModel {
     this.maxEnergy = 100,
     this.currentEnergy = 100,
     this.gold = 0,
-    this.guildId
+    this.guildId,
+    this.lastLoginDate,
+    this.claimedQuestIds = const [],
   });
 
-  // Helper to convert from Firestore
   factory UserModel.fromMap(Map<String, dynamic> data) {
     return UserModel(
       uid: data['uid'] ?? '',
@@ -54,10 +59,15 @@ class UserModel {
       maxEnergy: data['maxEnergy'] ?? 100,
       currentEnergy: data['currentEnergy'] ?? 100,
       gold: data['gold'] ?? 0,
-      guildId: data['guildId'], // Nullable
+      guildId: data['guildId'],
+      // Handle Firestore Timestamp conversion
+      lastLoginDate: data['lastLoginDate'] != null 
+          ? (data['lastLoginDate'] as Timestamp).toDate() 
+          : DateTime.now(),
+      claimedQuestIds: List<String>.from(data['claimedQuestIds'] ?? []),
     );
   }
-  // Helper to convert TO Firestore
+
   Map<String, dynamic> toMap() {
     return {
       'uid': uid,
@@ -72,6 +82,8 @@ class UserModel {
       'currentEnergy': currentEnergy,
       'gold': gold,
       'guildId': guildId,
+      'lastLoginDate': lastLoginDate != null ? Timestamp.fromDate(lastLoginDate!) : FieldValue.serverTimestamp(),
+      'claimedQuestIds': claimedQuestIds,
     };
   }
 
@@ -83,6 +95,18 @@ class UserModel {
   }
 }
 
+// Quest Definition
+class Quest {
+  final String id;
+  final String title;
+  final String description;
+  final int targetSteps;
+  final int rewardGold;
+  final int rewardXp;
+
+  Quest(this.id, this.title, this.description, this.targetSteps, this.rewardGold, this.rewardXp);
+}
+
 class GuildModel {
   final String id;
   final String name;
@@ -90,13 +114,7 @@ class GuildModel {
   final List<String> members;
   final int totalSteps;
 
-  GuildModel({
-    required this.id,
-    required this.name,
-    required this.leaderId,
-    required this.members,
-    this.totalSteps = 0,
-  });
+  GuildModel({required this.id, required this.name, required this.leaderId, required this.members, this.totalSteps = 0});
 
   factory GuildModel.fromMap(Map<String, dynamic> data) {
     return GuildModel(
@@ -109,14 +127,12 @@ class GuildModel {
   }
 
   Map<String, dynamic> toMap() {
-    return {
-      'id': id, 'name': name, 'leaderId': leaderId, 'members': members, 'totalSteps': totalSteps
-    };
+    return {'id': id, 'name': name, 'leaderId': leaderId, 'members': members, 'totalSteps': totalSteps};
   }
 }
 
 // ==========================================
-// 2. STATE MANAGEMENT & AUTH
+// 2. STATE MANAGEMENT
 // ==========================================
 
 class AppState extends ChangeNotifier {
@@ -133,6 +149,13 @@ class AppState extends ChangeNotifier {
   int monsterHp = 100;
   int monsterMaxHp = 100;
   String battleLog = "A wild Goblin appeared!";
+
+  // Daily Quests List
+  final List<Quest> dailyQuests = [
+    Quest('q1', 'Morning Jog', 'Walk 1,000 steps', 1000, 50, 20),
+    Quest('q2', 'Adventurer', 'Walk 5,000 steps', 5000, 150, 50),
+    Quest('q3', 'Heroic Journey', 'Walk 10,000 steps', 10000, 500, 200),
+  ];
 
   bool get isAuthenticated => _firebaseUser != null;
   UserModel? get user => _currentUser;
@@ -161,19 +184,73 @@ class AppState extends ChangeNotifier {
     _currentUser = await _dbService.getUser(uid);
     if (_currentUser == null) {
        _currentUser = UserModel.mock();
-    } else if (_currentUser!.guildId != null) {
-       _currentGuild = await _dbService.getGuild(_currentUser!.guildId!);
     } else {
-      _currentGuild = null;
+      // Check for Daily Reset logic
+      _checkDailyReset();
+      
+      if (_currentUser!.guildId != null) {
+         _currentGuild = await _dbService.getGuild(_currentUser!.guildId!);
+      } else {
+        _currentGuild = null;
+      }
     }
     notifyListeners();
+  }
+
+  // Reset quests if it's a new day
+  void _checkDailyReset() {
+    if (_currentUser == null || _currentUser!.lastLoginDate == null) return;
+
+    final now = DateTime.now();
+    final last = _currentUser!.lastLoginDate!;
+    
+    // If day, month, or year is different, it's a new day
+    if (now.day != last.day || now.month != last.month || now.year != last.year) {
+      print("🌅 New Day Detected! Resetting Quests.");
+      _updateUserData(claimedQuests: [], lastLogin: now);
+    } else {
+      // Just update the login time
+      _updateUserData(lastLogin: now);
+    }
+  }
+
+  // Claim Reward
+  void claimQuest(Quest quest) {
+    if (_currentUser == null) return;
+    
+    if (_currentUser!.claimedQuestIds.contains(quest.id)) return; // Already claimed
+    if (_currentUser!.currentSteps < quest.targetSteps) return; // Not finished
+
+    // Give Rewards
+    int newGold = _currentUser!.gold + quest.rewardGold;
+    int newXp = _currentUser!.xp + quest.rewardXp;
+    
+    // Add to claimed list
+    List<String> newClaimed = List.from(_currentUser!.claimedQuestIds)..add(quest.id);
+
+    // Level Up Logic reuse
+    int newLevel = _currentUser!.level;
+    int newNextXp = _currentUser!.xpToNextLevel;
+    if (newXp >= newNextXp) {
+        newLevel++;
+        newXp = newXp - newNextXp;
+        newNextXp = (newNextXp * 1.5).toInt();
+    }
+
+    _updateUserData(
+      gold: newGold, 
+      xp: newXp, 
+      level: newLevel, 
+      nextXp: newNextXp,
+      claimedQuests: newClaimed
+    );
   }
 
   Future<void> _initPedometer() async {
     bool granted = await _stepService.init();
     if (granted) {
       _stepSubscription = _stepService.stepStream.listen((stepEvent) {
-          // Real implementation would go here
+          // Pedometer logic
       });
     }
   }
@@ -184,7 +261,11 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void _updateUserData({int? steps, int? gold, int? xp, int? level, int? nextXp}) {
+  // Unified Update Helper
+  void _updateUserData({
+    int? steps, int? gold, int? xp, int? level, int? nextXp, 
+    List<String>? claimedQuests, DateTime? lastLogin
+  }) {
      if (_currentUser != null) {
         _currentUser = UserModel(
         uid: _currentUser!.uid,
@@ -199,49 +280,43 @@ class AppState extends ChangeNotifier {
         currentEnergy: _currentUser!.currentEnergy,
         gold: gold ?? _currentUser!.gold,
         guildId: _currentUser!.guildId,
+        lastLoginDate: lastLogin ?? _currentUser!.lastLoginDate,
+        claimedQuestIds: claimedQuests ?? _currentUser!.claimedQuestIds,
       );
       notifyListeners();
       _dbService.createUser(_currentUser!);
      }
   }
 
-  // [GUILD LOGIC] Create
+  // Guild Wrappers
   Future<void> createGuild(String name) async {
     if (_currentUser == null) return;
     await _dbService.createGuild(name, _currentUser!);
     await _loadUserData(_currentUser!.uid);
   }
-
-  // [GUILD LOGIC] Join
   Future<void> joinGuild(String guildId) async {
     if (_currentUser == null) return;
     await _dbService.joinGuild(guildId, _currentUser!);
     await _loadUserData(_currentUser!.uid);
   }
-
-  // [GUILD LOGIC] Leave
   Future<void> leaveGuild() async {
     if (_currentUser == null || _currentGuild == null) return;
     await _dbService.leaveGuild(_currentGuild!.id, _currentUser!);
     await _loadUserData(_currentUser!.uid);
   }
-  
-  // [GUILD LOGIC] Fetch List
   Future<List<GuildModel>> getAvailableGuilds() async {
     return await _dbService.getAllGuilds();
   }
 
-  // [BATTLE LOGIC]
+  // Battle Logic
   Future<void> attackMonster() async {
     if (_currentUser == null) return;
     const int cost = 100;
-
     if (_currentUser!.currentSteps < cost) {
       battleLog = "Need $cost steps! Walk more.";
       notifyListeners();
       return;
     }
-
     int newSteps = _currentUser!.currentSteps - cost;
     int damage = Random().nextInt(15) + 10;
     monsterHp -= damage;
@@ -258,7 +333,6 @@ class AppState extends ChangeNotifier {
       newGold += reward;
       newXp += 50;
       battleLog = "Victory! +$reward G, +50 XP";
-
       if (newXp >= newNextXp) {
         newLevel++;
         newXp = newXp - newNextXp;
@@ -266,7 +340,6 @@ class AppState extends ChangeNotifier {
         battleLog += "\n🎉 LEVEL UP!";
       }
     }
-
     _updateUserData(steps: newSteps, gold: newGold, xp: newXp, level: newLevel, nextXp: newNextXp);
   }
 
@@ -294,7 +367,7 @@ class AppState extends ChangeNotifier {
 }
 
 // ==========================================
-// 3. THEME (UNCHANGED)
+// 3. THEME
 // ==========================================
 class AppTheme {
   static final ThemeData darkTheme = ThemeData(
@@ -303,10 +376,8 @@ class AppTheme {
     scaffoldBackgroundColor: const Color(0xFF0F172A),
     primaryColor: const Color(0xFFEAB308),
     colorScheme: const ColorScheme.dark(
-      primary: Color(0xFFEAB308),
-      secondary: Color(0xFF3B82F6),
-      surface: Color(0xFF1E293B),
-      error: Color(0xFFEF4444),
+      primary: Color(0xFFEAB308), secondary: Color(0xFF3B82F6),
+      surface: Color(0xFF1E293B), error: Color(0xFFEF4444),
     ),
     fontFamily: 'Georgia',
     textTheme: const TextTheme(
@@ -322,15 +393,11 @@ class AppTheme {
 }
 
 // ==========================================
-// 4. MAIN APP ENTRY
+// 4. MAIN ENTRY
 // ==========================================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp();
-  } catch (e) {
-    print("Firebase Error: $e");
-  }
+  try { await Firebase.initializeApp(); } catch (e) { print("Firebase Error: $e"); }
   runApp(const StepQuestApp());
 }
 
@@ -362,7 +429,6 @@ class _StepQuestAppState extends State<StepQuestApp> {
 // 5. SCREENS
 // ==========================================
 
-// --- LOGIN SCREEN ---
 class LoginScreen extends StatefulWidget {
   final AppState appState;
   const LoginScreen({super.key, required this.appState});
@@ -440,7 +506,6 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-// --- MAIN SCAFFOLD ---
 class MainScaffold extends StatefulWidget {
   final AppState appState;
   const MainScaffold({super.key, required this.appState});
@@ -478,7 +543,6 @@ class _MainScaffoldState extends State<MainScaffold> {
   }
 }
 
-// --- DASHBOARD SCREEN ---
 class DashboardScreen extends StatelessWidget {
   final AppState appState;
   const DashboardScreen({super.key, required this.appState});
@@ -551,7 +615,6 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
-// --- BATTLE SCREEN ---
 class BattleScreen extends StatelessWidget {
   final AppState appState;
   const BattleScreen({super.key, required this.appState});
@@ -651,13 +714,16 @@ class BattleScreen extends StatelessWidget {
   }
 }
 
-// --- QUEST SCREEN ---
+// --- QUEST SCREEN (UPDATED) ---
 class QuestScreen extends StatelessWidget {
   final AppState appState;
   const QuestScreen({super.key, required this.appState});
+
   @override
   Widget build(BuildContext context) {
     final steps = appState.user?.currentSteps ?? 0;
+    final claimed = appState.user?.claimedQuestIds ?? [];
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -667,29 +733,54 @@ class QuestScreen extends StatelessWidget {
             Text("Quest Board", style: Theme.of(context).textTheme.displayLarge),
             const Text("Daily challenges reset at midnight.", style: TextStyle(color: Colors.grey)),
             const SizedBox(height: 20),
-            _buildQuestCard(context, "Warm Up", "Reach 1,000 steps", "50 G", steps >= 1000),
-            _buildQuestCard(context, "Daily Goal", "Reach 5,000 steps", "100 G", steps >= 5000),
-            _buildQuestCard(context, "Marathon", "Reach 10,000 steps", "500 G", steps >= 10000),
+            
+            // Dynamic List from AppState
+            ...appState.dailyQuests.map((quest) {
+              bool isCompleted = steps >= quest.targetSteps;
+              bool isClaimed = claimed.contains(quest.id);
+              
+              return Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                color: isClaimed ? Colors.green[900]!.withOpacity(0.3) : Theme.of(context).cardTheme.color,
+                child: ListTile(
+                  leading: Icon(
+                    isClaimed ? Icons.check_circle : (isCompleted ? Icons.stars : Icons.circle_outlined), 
+                    color: isClaimed ? Colors.green : (isCompleted ? Colors.amber : Colors.grey)
+                  ),
+                  title: Text(quest.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(quest.description),
+                      const SizedBox(height: 4),
+                      LinearProgressIndicator(
+                        value: (steps / quest.targetSteps).clamp(0.0, 1.0),
+                        backgroundColor: Colors.black26,
+                        color: isCompleted ? Colors.green : Colors.blue,
+                        minHeight: 6,
+                      )
+                    ],
+                  ),
+                  trailing: isClaimed 
+                    ? const Text("DONE", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold))
+                    : ElevatedButton(
+                        onPressed: isCompleted ? () => appState.claimQuest(quest) : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isCompleted ? Colors.amber : Colors.grey[800],
+                          foregroundColor: Colors.black,
+                        ),
+                        child: Text(isCompleted ? "CLAIM" : "${quest.rewardGold} G"),
+                      ),
+                ),
+              );
+            }),
           ],
         ),
       ),
     );
   }
-
-  Widget _buildQuestCard(BuildContext context, String title, String desc, String reward, bool completed) {
-    return Card(
-      color: completed ? Colors.green[900]!.withOpacity(0.3) : null,
-      child: ListTile(
-        leading: Icon(completed ? Icons.check_circle : Icons.circle_outlined, color: completed ? Colors.green : Colors.grey),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(desc),
-        trailing: Chip(label: Text(reward), backgroundColor: Colors.amber[800]),
-      ),
-    );
-  }
 }
 
-// --- GUILD SCREEN ---
 class GuildScreen extends StatelessWidget {
   final AppState appState;
   const GuildScreen({super.key, required this.appState});
@@ -701,7 +792,6 @@ class GuildScreen extends StatelessWidget {
         future: appState.getAvailableGuilds(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) return const AlertDialog(content: LinearProgressIndicator());
-          
           final guilds = snapshot.data!;
           return AlertDialog(
             title: const Text("Join a Guild"),
@@ -737,7 +827,6 @@ class GuildScreen extends StatelessWidget {
     final guild = appState.guild;
     final TextEditingController guildNameController = TextEditingController();
 
-    // STATE 1: User has NO Guild
     if (guild == null) {
       return SafeArea(
         child: Padding(
@@ -750,7 +839,6 @@ class GuildScreen extends StatelessWidget {
               Text("No Guild", style: Theme.of(context).textTheme.displayMedium),
               const Text("Join forces with others to earn bonus loot!", textAlign: TextAlign.center),
               const SizedBox(height: 32),
-              
               TextField(
                 controller: guildNameController,
                 decoration: const InputDecoration(labelText: "Guild Name", border: OutlineInputBorder()),
@@ -768,7 +856,6 @@ class GuildScreen extends StatelessWidget {
                   child: const Text("CREATE NEW GUILD", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 ),
               ),
-              // [UPDATED] Join Button Logic
               TextButton(
                 onPressed: () => _showJoinDialog(context), 
                 child: const Text("Join Existing Guild")
@@ -779,7 +866,6 @@ class GuildScreen extends StatelessWidget {
       );
     }
 
-    // STATE 2: User HAS a Guild
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -791,7 +877,6 @@ class GuildScreen extends StatelessWidget {
             Center(child: Text(guild.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
             const Center(child: Text("Guild Level 1", style: TextStyle(color: Colors.blue))),
             const SizedBox(height: 30),
-            
             Card(
               child: ListTile(
                 leading: const Icon(Icons.hiking, color: Colors.green),
@@ -799,20 +884,17 @@ class GuildScreen extends StatelessWidget {
                 trailing: Text("${guild.totalSteps}", style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
             ),
-            
             const SizedBox(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text("Members (${guild.members.length})", style: Theme.of(context).textTheme.titleLarge),
-                // [NEW] Leave Button
                 TextButton(
                   onPressed: () => appState.leaveGuild(), 
                   child: const Text("Leave Guild", style: TextStyle(color: Colors.red))
                 )
               ],
             ),
-            
             Expanded(
               child: ListView.builder(
                 itemCount: guild.members.length,
@@ -830,7 +912,6 @@ class GuildScreen extends StatelessWidget {
   }
 }
 
-// --- PROFILE SCREEN ---
 class ProfileScreen extends StatelessWidget {
   final AppState appState;
   const ProfileScreen({super.key, required this.appState});
