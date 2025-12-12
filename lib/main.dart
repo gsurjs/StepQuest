@@ -52,6 +52,7 @@ class UserModel {
   final int currentSteps;
   final int maxEnergy;
   final int currentEnergy;
+  final int lifetimeSteps;  // Never Resets
   final int gold;
   final String? guildId;
   final DateTime? lastLoginDate;
@@ -67,6 +68,7 @@ class UserModel {
     this.xp = 0,
     this.xpToNextLevel = 100,
     this.currentSteps = 0,
+    this.lifetimeSteps = 0,
     this.maxEnergy = 100,
     this.currentEnergy = 100,
     this.gold = 0,
@@ -86,6 +88,7 @@ class UserModel {
       xp: data['xp'] ?? 0,
       xpToNextLevel: data['xpToNextLevel'] ?? 100,
       currentSteps: data['currentSteps'] ?? 0,
+      lifetimeSteps: data['lifetimeSteps'] ?? 0,
       maxEnergy: data['maxEnergy'] ?? 100,
       currentEnergy: data['currentEnergy'] ?? 100,
       gold: data['gold'] ?? 0,
@@ -108,6 +111,7 @@ class UserModel {
       'xp': xp,
       'xpToNextLevel': xpToNextLevel,
       'currentSteps': currentSteps,
+      'lifetimeSteps': lifetimeSteps,
       'maxEnergy': maxEnergy,
       'currentEnergy': currentEnergy,
       'gold': gold,
@@ -255,9 +259,18 @@ class AppState extends ChangeNotifier {
     if (_currentUser == null || _currentUser!.lastLoginDate == null) return;
     final now = DateTime.now();
     final last = _currentUser!.lastLoginDate!;
+
     if (now.day != last.day || now.month != last.month || now.year != last.year) {
-      _updateUserData(claimedQuests: [], lastLogin: now, steps: 0);
+      print("📅 NEW DAY DETECTED! Resetting Daily Steps...");
+      // RESET Daily Steps to 0, but keep Lifetime Steps (passed implicitly via copyWith logic in _updateUserData)
+      // Clear claimed quests for the new day
+      _updateUserData(
+        steps: 0, 
+        claimedQuests: [], 
+        lastLogin: now
+      );
     } else {
+      // Same day, just update login time
       _updateUserData(lastLogin: now);
     }
   }
@@ -422,22 +435,29 @@ class AppState extends ChangeNotifier {
     bool granted = await _stepService.init();
     if (granted) {
       _stepSubscription = _stepService.stepStream.listen((stepEvent) {
-         // Placeholder for live step logic
       });
     }
   }
 
   void debugAddSteps(int amount) {
     if (_currentUser != null) {
-      int newSteps = _currentUser!.currentSteps + amount;
+      int newDailySteps = _currentUser!.currentSteps + amount;
+      int newLifetimeSteps = _currentUser!.lifetimeSteps + amount; // Accumulate lifetime
+      
+      // Regenerate Energy (1 Energy per 100 steps)
       int energyGain = (amount / 100).floor();
       int newEnergy = (_currentUser!.currentEnergy + energyGain).clamp(0, _currentUser!.maxEnergy);
-      _updateUserData(steps: newSteps, energy: newEnergy);
+      
+      _updateUserData(
+        steps: newDailySteps, 
+        lifetimeSteps: newLifetimeSteps,
+        energy: newEnergy
+      );
     }
   }
 
   void _updateUserData({
-    int? steps, int? gold, int? xp, int? level, int? nextXp, int? energy,
+    int? steps, int? lifetimeSteps, int? gold, int? xp, int? level, int? nextXp, int? energy,
     List<String>? claimedQuests, DateTime? lastLogin, List<String>? inventory,
   }) {
     if (_currentUser != null) {
@@ -450,6 +470,7 @@ class AppState extends ChangeNotifier {
         xp: xp ?? _currentUser!.xp,
         xpToNextLevel: nextXp ?? _currentUser!.xpToNextLevel,
         currentSteps: steps ?? _currentUser!.currentSteps,
+        lifetimeSteps: lifetimeSteps ?? _currentUser!.lifetimeSteps,
         maxEnergy: _currentUser!.maxEnergy,
         currentEnergy: energy ?? _currentUser!.currentEnergy,
         gold: gold ?? _currentUser!.gold,
@@ -1381,6 +1402,32 @@ class ProfileScreen extends StatelessWidget {
                     color: Colors.purpleAccent,
                     minHeight: 10)),
             Text("${user.xp} / ${user.xpToNextLevel} XP", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 16),
+            
+            // --- LIFETIME STEPS CARD ---
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[800]!)
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.history, color: Colors.green),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("Lifetime Steps", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                      Text("${user.lifetimeSteps}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    ],
+                  )
+                ],
+              ),
+            ),
+
             const SizedBox(height: 24),
             Align(alignment: Alignment.centerLeft, child: Text("Inventory", style: Theme.of(context).textTheme.titleLarge)),
             const SizedBox(height: 8),
