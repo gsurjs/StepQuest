@@ -8,6 +8,7 @@ import 'package:step_quest/services/step_service.dart';
 import 'dart:async';
 import 'dart:math';
 import 'firebase_options.dart';
+import 'package:pedometer/pedometer.dart'; // <--- ADD THIS
 
 // ==========================================
 // 1. DATA MODELS & MONSTER LIST
@@ -194,6 +195,7 @@ class AppState extends ChangeNotifier {
   late Monster activeMonster; 
   int currentMonsterHp = 50;  
   String battleLog = "A wild monster appeared!";
+  int? _lastSensorReading;
 
   WorldZone? _currentZone;
   final List<WorldZone> worldZones = [
@@ -432,10 +434,46 @@ class AppState extends ChangeNotifier {
 
   // --- PEDOMETER & DATA SYNC ---
   Future<void> _initPedometer() async {
+    // 1. Initialize your specific StepService
     bool granted = await _stepService.init();
+    
     if (granted) {
-      _stepSubscription = _stepService.stepStream.listen((stepEvent) {
-      });
+      print("Step Permission Granted. Listening to sensor...");
+      
+      // 2. Listen to the stream from your file
+      _stepSubscription = _stepService.stepStream.listen(
+        (StepCount event) {
+          final int reading = event.steps;
+          print("Pedometer event: $reading steps"); // Debug print
+
+          // A. If this is the first reading, just set the baseline
+          if (_lastSensorReading == null) {
+            _lastSensorReading = reading;
+            return;
+          }
+
+          // B. Calculate new steps (Current - Previous)
+          int delta = reading - _lastSensorReading!;
+          
+          // C. Handle device reboot (sensor resets to 0)
+          if (delta < 0) {
+            delta = reading; // Assume all steps are new
+          }
+
+          // D. Add to game if we moved
+          if (delta > 0) {
+            debugAddSteps(delta);
+          }
+
+          // E. Update baseline
+          _lastSensorReading = reading;
+        },
+        onError: (error) {
+          print("Pedometer Error: $error");
+        },
+      );
+    } else {
+      print("Permission denied for Pedometer");
     }
   }
 
