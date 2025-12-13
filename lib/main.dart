@@ -8,7 +8,7 @@ import 'package:step_quest/services/step_service.dart';
 import 'dart:async';
 import 'dart:math';
 import 'firebase_options.dart';
-import 'package:pedometer/pedometer.dart'; // <--- ADD THIS
+import 'package:pedometer/pedometer.dart';
 
 // ==========================================
 // 1. DATA MODELS & MONSTER LIST
@@ -809,9 +809,43 @@ class _MainScaffoldState extends State<MainScaffold> {
 }
 
 // --- DASHBOARD ---
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   final AppState appState;
   const DashboardScreen({super.key, required this.appState});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  // [EASTER EGG] State variables
+  int _tapCount = 0;
+  bool _showDebugButton = false;
+  Timer? _tapResetTimer;
+
+  void _handleHiddenTap() {
+    // 1. Increment Tap
+    setState(() => _tapCount++);
+
+    // 2. Reset counter if user stops tapping for 2 seconds
+    _tapResetTimer?.cancel();
+    _tapResetTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _tapCount = 0);
+    });
+
+    // 3. Check Condition (7 Taps)
+    if (_tapCount >= 7) {
+      if (!_showDebugButton) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("🛠️ Developer Mode Enabled!"), duration: Duration(seconds: 2)),
+        );
+      }
+      setState(() {
+        _showDebugButton = !_showDebugButton; // Toggle visibility
+        _tapCount = 0; // Reset
+      });
+    }
+  }
 
   void _showShop(BuildContext context) {
     showModalBottomSheet(
@@ -826,16 +860,16 @@ class DashboardScreen extends StatelessWidget {
             const Divider(),
             Expanded(
               child: ListView.builder(
-                itemCount: appState.gameItems.length,
+                itemCount: widget.appState.gameItems.length,
                 itemBuilder: (ctx, i) {
-                  final item = appState.gameItems[i];
+                  final item = widget.appState.gameItems[i];
                   return ListTile(
                     leading: Text(item.icon, style: const TextStyle(fontSize: 30)),
                     title: Text(item.name),
                     subtitle: Text(item.rarity),
                     trailing: ElevatedButton(
                       onPressed: () {
-                        appState.buyItem(item);
+                        widget.appState.buyItem(item);
                         Navigator.pop(context);
                       },
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
@@ -857,15 +891,15 @@ class DashboardScreen extends StatelessWidget {
       backgroundColor: const Color(0xFF1E293B),
       builder: (ctx) => ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: appState.worldZones.length,
+        itemCount: widget.appState.worldZones.length,
         itemBuilder: (ctx, i) {
-          final zone = appState.worldZones[i];
+          final zone = widget.appState.worldZones[i];
           return ListTile(
             leading: Text(zone.imageEmoji, style: const TextStyle(fontSize: 30)),
             title: Text(zone.name, style: const TextStyle(color: Colors.white)),
             subtitle: Text("Lvl ${zone.minLevel}+"),
             onTap: () {
-              appState.travelToZone(zone);
+              widget.appState.travelToZone(zone);
               Navigator.pop(context);
             },
           );
@@ -876,16 +910,20 @@ class DashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = appState.user;
+    final user = widget.appState.user;
     if (user == null) return const Center(child: CircularProgressIndicator());
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => appState.debugAddSteps(500),
-        backgroundColor: Colors.green,
-        child: const Icon(Icons.add),
-      ),
+      // [EASTER EGG] Only show FAB if _showDebugButton is true
+      floatingActionButton: _showDebugButton 
+          ? FloatingActionButton.extended(
+              onPressed: () => widget.appState.debugAddSteps(500),
+              backgroundColor: Colors.green,
+              icon: const Icon(Icons.add),
+              label: const Text("Simulate +500"),
+            )
+          : null,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
@@ -920,31 +958,37 @@ class DashboardScreen extends StatelessWidget {
                 ],
               ),
               const Spacer(),
-              // Circular Progress
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  SizedBox(
-                    width: 250,
-                    height: 250,
-                    child: CircularProgressIndicator(
-                      value: (user.currentSteps / 10000).clamp(0.0, 1.0),
-                      strokeWidth: 20,
-                      backgroundColor: const Color(0xFF1E293B),
-                      color: Colors.green,
+              
+              // [EASTER EGG] Wrapped the Step Circle in GestureDetector
+              GestureDetector(
+                onTap: _handleHiddenTap, // <--- Tapping this circle triggers the count
+                behavior: HitTestBehavior.opaque,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: 250,
+                      height: 250,
+                      child: CircularProgressIndicator(
+                        value: (user.currentSteps / 10000).clamp(0.0, 1.0),
+                        strokeWidth: 20,
+                        backgroundColor: const Color(0xFF1E293B),
+                        color: Colors.green,
+                      ),
                     ),
-                  ),
-                  Column(
-                    children: [
-                      const Icon(Icons.directions_walk, size: 40, color: Colors.green),
-                      const SizedBox(height: 8),
-                      Text("${user.currentSteps}",
-                          style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
-                      const Text("DAILY STEPS", style: TextStyle(color: Colors.grey, letterSpacing: 1.5)),
-                    ],
-                  )
-                ],
+                    Column(
+                      children: [
+                        const Icon(Icons.directions_walk, size: 40, color: Colors.green),
+                        const SizedBox(height: 8),
+                        Text("${user.currentSteps}",
+                            style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
+                        const Text("DAILY STEPS", style: TextStyle(color: Colors.grey, letterSpacing: 1.5)),
+                      ],
+                    )
+                  ],
+                ),
               ),
+              
               const SizedBox(height: 40),
               // Energy Bar
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -1004,7 +1048,7 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
-// --- BATTLE SCREEN (UPDATED) ---
+// --- BATTLE SCREEN ---
 class BattleScreen extends StatefulWidget {
   final AppState appState;
   const BattleScreen({super.key, required this.appState});
